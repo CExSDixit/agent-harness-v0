@@ -102,7 +102,7 @@ my-context-repo/
 | **Docker** | Container runtime | [Docker Desktop](https://docker.com/products/docker-desktop), [OrbStack](https://orbstack.dev), or [Colima](https://github.com/abiosoft/colima) |
 | **Python 3** | Config sanitization (JSON/TOML rewriting) | Pre-installed on macOS. `brew install python3` or `apt install python3` |
 | **jq** | GitHub meta API parsing in firewall init | `brew install jq` or `apt install jq` |
-| **Bash 4+** | harness.sh uses arrays and `${var:+...}` syntax | Pre-installed on Linux. macOS ships Bash 3 — `brew install bash` or use zsh |
+| **Bash 3.2+** | harness.sh shell | Pre-installed on macOS and Linux |
 
 Standard utilities also used: `curl`, `sed`, `cp`, `mkdir`, `mktemp`, `basename`, `dirname` (all pre-installed on macOS and Linux).
 
