@@ -141,38 +141,73 @@ if [[ "$AGENT" == "claude-code" ]]; then
   # Sanitize .claude.json for container use:
   # - Rewrite localhost URLs to host.docker.internal (for host-side services like Plane)
   # - Remove MCP servers that require host hardware (trnscrb)
+  # Build path mapping JSON: host paths → container paths
+  # Cookbooks path → /cookbooks, each repo → /repos/<basename>
+  PATH_MAP="{\"$(cd "$COOKBOOKS_PATH" && pwd -P)\": \"/cookbooks\""
+  for repo_spec in "${REPOS[@]}"; do
+    repo_path="${repo_spec%%:*}"
+    repo_path="${repo_path/#\~/$HOME}"
+    repo_real="$(cd "$repo_path" && pwd -P)"
+    repo_name=$(basename "$repo_path")
+    PATH_MAP="$PATH_MAP, \"$repo_real\": \"/repos/$repo_name\""
+  done
+  PATH_MAP="$PATH_MAP}"
+
   if [[ -f "$HOME/.claude.json" ]]; then
     python3 -c "
 import json, sys, re
+
 with open(sys.argv[1]) as f:
     d = json.load(f)
-# Process all mcpServers sections (global and per-project)
+path_map = json.loads(sys.argv[3])
+
 def sanitize_mcp(servers):
     to_remove = []
     for name, cfg in servers.items():
-        # Remove servers that need host hardware
+        # Remove servers that need host hardware (STDIO only, no network transport)
         if name in ('trnscrb',):
             to_remove.append(name)
             continue
-        # Rewrite localhost to host.docker.internal in env vars
+        # Rewrite localhost to host.docker.internal in env vars and URLs
         if 'env' in cfg:
             for k, v in cfg['env'].items():
                 if isinstance(v, str):
                     cfg['env'][k] = re.sub(r'localhost|127\.0\.0\.1', 'host.docker.internal', v)
+        if 'url' in cfg and isinstance(cfg['url'], str):
+            cfg['url'] = re.sub(r'localhost|127\.0\.0\.1', 'host.docker.internal', cfg['url'])
     for name in to_remove:
         del servers[name]
+
 # Global mcpServers
 if 'mcpServers' in d:
     sanitize_mcp(d['mcpServers'])
-# Per-project mcpServers
+
+# Per-project mcpServers — remap project paths to container paths
 if 'projects' in d:
+    remapped = {}
     for proj, pcfg in d['projects'].items():
-        if 'mcpServers' in pcfg:
-            sanitize_mcp(pcfg['mcpServers'])
+        # Find the container path for this project
+        container_path = None
+        for host_path, cont_path in path_map.items():
+            if proj == host_path or proj.rstrip('/') == host_path.rstrip('/'):
+                container_path = cont_path
+                break
+        new_key = container_path if container_path else proj
+        if new_key in remapped:
+            # Merge MCP servers if same container path
+            existing = remapped[new_key].get('mcpServers', {})
+            existing.update(pcfg.get('mcpServers', {}))
+            remapped[new_key]['mcpServers'] = existing
+        else:
+            remapped[new_key] = pcfg
+        if 'mcpServers' in remapped[new_key]:
+            sanitize_mcp(remapped[new_key]['mcpServers'])
+    d['projects'] = remapped
+
 with open(sys.argv[2], 'w') as f:
     json.dump(d, f, indent=2)
-" "$HOME/.claude.json" "$AGENT_TMPDIR/.claude.json"
-    info "Sanitized .claude.json (rewrote localhost → host.docker.internal, removed hardware-dependent MCP servers)"
+" "$HOME/.claude.json" "$AGENT_TMPDIR/.claude.json" "$PATH_MAP"
+    info "Sanitized .claude.json (remapped paths, rewrote localhost, removed hardware-dependent MCP servers)"
   fi
 elif [[ "$AGENT" == "codex" ]]; then
   mkdir -p "$AGENT_TMPDIR/.codex"
