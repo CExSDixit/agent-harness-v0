@@ -219,9 +219,19 @@ elif [[ "$AGENT" == "codex" ]]; then
   [[ -f "$HOME/.codex/auth.json" ]] && cp "$HOME/.codex/auth.json" "$AGENT_TMPDIR/.codex/auth.json"
   # Copy and sanitize config (rewrite localhost → host.docker.internal for MCP servers)
   if [[ -f "$HOME/.codex/config.toml" ]]; then
-    sed 's|localhost|host.docker.internal|g; s|127\.0\.0\.1|host.docker.internal|g' \
-      "$HOME/.codex/config.toml" > "$AGENT_TMPDIR/.codex/config.toml"
-    info "Sanitized .codex/config.toml (rewrote localhost → host.docker.internal)"
+    # Sanitize: rewrite localhost, strip host-specific [projects.*] sections
+    python3 -c "
+import re, sys
+with open(sys.argv[1]) as f:
+    content = f.read()
+# Rewrite localhost
+content = re.sub(r'localhost|127\.0\.0\.1', 'host.docker.internal', content)
+# Remove [projects.*] sections (host paths that don't exist in container)
+content = re.sub(r'\[projects\.[^\]]*\]\n(?:[^\[]*\n)*', '', content)
+with open(sys.argv[2], 'w') as f:
+    f.write(content)
+" "$HOME/.codex/config.toml" "$AGENT_TMPDIR/.codex/config.toml"
+    info "Sanitized .codex/config.toml (rewrote localhost, stripped host project paths)"
   fi
   # Copy project-level codex configs from mounted repos
   for repo_spec in "${REPOS[@]}"; do
