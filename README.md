@@ -103,7 +103,7 @@ docker build -t agent-harness:latest .
 # 2. Configure (see Configuration section below)
 cp .env.example .env
 # Edit .env with your paths and GitHub App credentials
-source .env
+# (harness.sh auto-sources .env — no need to source manually)
 
 # 3. Launch a dev agent
 ./harness.sh dev \
@@ -115,7 +115,7 @@ source .env
 
 ## Configuration
 
-Copy `.env.example` to `.env`, fill in your values, then `source .env` before running `harness.sh`.
+Copy `.env.example` to `.env` and fill in your values. `harness.sh` auto-sources `.env` from its own directory — no need to source manually. Environment variables already set in your shell take precedence over `.env` values.
 
 | Variable | Required | Description |
 |---|---|---|
