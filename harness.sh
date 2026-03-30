@@ -215,8 +215,24 @@ with open(sys.argv[2], 'w') as f:
   fi
 elif [[ "$AGENT" == "codex" ]]; then
   mkdir -p "$AGENT_TMPDIR/.codex"
+  # Copy auth tokens (read-write — Codex refreshes tokens in place)
   [[ -f "$HOME/.codex/auth.json" ]] && cp "$HOME/.codex/auth.json" "$AGENT_TMPDIR/.codex/auth.json"
-  [[ -f "$HOME/.codex/config.toml" ]] && cp "$HOME/.codex/config.toml" "$AGENT_TMPDIR/.codex/config.toml"
+  # Copy and sanitize config (rewrite localhost → host.docker.internal for MCP servers)
+  if [[ -f "$HOME/.codex/config.toml" ]]; then
+    sed 's|localhost|host.docker.internal|g; s|127\.0\.0\.1|host.docker.internal|g' \
+      "$HOME/.codex/config.toml" > "$AGENT_TMPDIR/.codex/config.toml"
+    info "Sanitized .codex/config.toml (rewrote localhost → host.docker.internal)"
+  fi
+  # Copy project-level codex configs from mounted repos
+  for repo_spec in "${REPOS[@]}"; do
+    repo_path="${repo_spec%%:*}"
+    repo_path="${repo_path/#\~/$HOME}"
+    repo_name=$(basename "$repo_path")
+    if [[ -f "$repo_path/.codex/auth.json" ]]; then
+      mkdir -p "$AGENT_TMPDIR/.codex/projects/$repo_name"
+      cp "$repo_path/.codex/auth.json" "$AGENT_TMPDIR/.codex/projects/$repo_name/auth.json"
+    fi
+  done
 else
   die "Unknown agent: $AGENT. Use claude-code or codex."
 fi

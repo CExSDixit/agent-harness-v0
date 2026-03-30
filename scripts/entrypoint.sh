@@ -5,6 +5,11 @@ set -euo pipefail
 # Runs as the agent user. No root access.
 # Firewall and GitHub auth are initialized by harness.sh before this runs.
 
+# Mark all mounted repos as git safe directories (host-mounted, different UID)
+for repo_dir in /repos/*/; do
+  git config --global --add safe.directory "${repo_dir%/}" 2>/dev/null || true
+done
+
 # Set working directory based on phase
 case "${HARNESS_ROLE:-review}" in
   plan)
