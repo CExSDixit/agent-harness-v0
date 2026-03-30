@@ -1,0 +1,32 @@
+#!/bin/bash
+set -euo pipefail
+
+# Agent Harness v0 — Hot-add a domain to the network allowlist
+# Usage: allow-domain <domain> [domain2] [domain3] ...
+# Takes effect immediately, no container restart needed.
+
+if [[ $# -eq 0 ]]; then
+  echo "Usage: allow-domain <domain> [domain2] ..."
+  echo "Example: allow-domain docs.python.org stackoverflow.com"
+  exit 1
+fi
+
+for domain in "$@"; do
+  ips=$(dig +noall +answer A "$domain" 2>/dev/null | awk '$4 == "A" {print $5}')
+
+  if [[ -z "$ips" ]]; then
+    echo "[allow] Failed to resolve: $domain"
+    continue
+  fi
+
+  count=0
+  while read -r ip; do
+    if [[ "$ip" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+      if sudo ipset add allowed-domains "$ip" 2>/dev/null; then
+        ((count++))
+      fi
+    fi
+  done <<< "$ips"
+
+  echo "[allow] $domain → $count IPs added"
+done

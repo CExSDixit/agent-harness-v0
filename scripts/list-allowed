@@ -1,0 +1,12 @@
+#!/bin/bash
+set -euo pipefail
+
+# Agent Harness v0 — List currently allowed IPs in the network allowlist
+# Usage: list-allowed
+
+echo "=== Allowed IPs (ipset: allowed-domains) ==="
+sudo ipset list allowed-domains 2>/dev/null | grep "^[0-9]" | sort || echo "(empty or ipset not initialized)"
+echo ""
+echo "Total: $(sudo ipset list allowed-domains 2>/dev/null | grep -c "^[0-9]" || echo 0) entries"
+echo ""
+echo "Use 'allow-domain <domain>' to add, 'deny-domain <domain>' to remove."

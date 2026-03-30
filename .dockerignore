@@ -1,0 +1,7 @@
+.git
+*.md
+.github
+.vscode
+.idea
+*.log
+.DS_Store
