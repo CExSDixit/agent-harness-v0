@@ -164,9 +164,13 @@ path_map = json.loads(sys.argv[3])
 def sanitize_mcp(servers):
     to_remove = []
     for name, cfg in servers.items():
-        # Remove servers that need host hardware (STDIO only, no network transport)
-        if name in ('trnscrb',):
-            to_remove.append(name)
+        # Rewrite STDIO servers that need host hardware to HTTP/SSE transport
+        # (they must be running on the host with network transport enabled)
+        if name == 'trnscrb' and cfg.get('type', 'stdio') == 'stdio':
+            servers[name] = {
+                'type': 'sse',
+                'url': 'http://host.docker.internal:8001/sse'
+            }
             continue
         # Rewrite localhost to host.docker.internal in env vars and URLs
         if 'env' in cfg:
