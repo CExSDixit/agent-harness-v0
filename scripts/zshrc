@@ -1,6 +1,5 @@
-# Agent Harness — shell configuration
-export PATH="$HOME/.fnm:$HOME/.local/bin:$PATH"
-eval "$($HOME/.fnm/fnm env 2>/dev/null)" || true
+# Agent Harness — interactive shell configuration
+# PATH setup is in .zshenv (sourced by all zsh invocations)
 
 # History
 export HISTFILE=/commandhistory/.zsh_history

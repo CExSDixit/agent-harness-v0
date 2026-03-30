@@ -1,0 +1,4 @@
+# Agent Harness — sourced by ALL zsh invocations (interactive and non-interactive)
+# PATH setup must be here, not .zshrc, so `docker exec` commands work.
+export PATH="$HOME/.fnm:$HOME/.local/bin:$PATH"
+eval "$($HOME/.fnm/fnm env 2>/dev/null)" || true

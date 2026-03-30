@@ -92,7 +92,8 @@ RUN \
   eval "$($FNM_DIR/fnm env)" && \
   npm install -g @anthropic-ai/claude-code@latest @openai/codex@latest
 
-# ── Shell config (.zshrc) ───────────────────────────────────────────────────
+# ── Shell config ─────────────────────────────────────────────────────────────
+COPY --chown=${USERNAME}:${USERNAME} scripts/zshenv /home/${USERNAME}/.zshenv
 COPY --chown=${USERNAME}:${USERNAME} scripts/zshrc /home/${USERNAME}/.zshrc
 
 # ── Entrypoint ───────────────────────────────────────────────────────────────
