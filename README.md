@@ -328,7 +328,7 @@ The MCP server is hosted remotely (cloud, staging environment). The container co
 | **Config type** | `"type": "http"` with `"url"` pointing to the remote endpoint |
 | **Image change** | None |
 | **Network change** | Add the server's domain to the network profile |
-| **Example** | ai-cockpit-stage (`https://ai-cockpit-mcp-stage.caseiq.app/mcp/`) |
+| **Example** | your-remote-mcp (`https://your-mcp-server.example.com/mcp/`) |
 
 **How to add a remote MCP server:**
 1. Add the server config to your `~/.claude.json`
@@ -445,16 +445,16 @@ codex   # Complete login
 
 ### OAuth MCP Servers
 
-For OAuth-protected MCP servers (e.g., ai-cockpit-stage with Entra OAuth), authenticate on the host first:
+For OAuth-protected MCP servers, authenticate on the host first:
 
 ```bash
-codex mcp login ai-cockpit-stage
+codex mcp login <server-name>
 ```
 
 The cached tokens in `~/.codex/auth.json` are mounted into the container. The server's domain must be in the network allowlist — either add it to a profile and rebuild, or hot-add at runtime:
 
 ```bash
-docker exec -u root <container> allow-domain ai-cockpit-mcp-stage.caseiq.app login.microsoftonline.com
+docker exec -u root <container> allow-domain your-mcp-server.example.com login.microsoftonline.com
 ```
 
 ### Config Format
