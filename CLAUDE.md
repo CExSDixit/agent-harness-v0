@@ -13,6 +13,7 @@ agent-harness-v0/
 ├── scripts/
 │   ├── entrypoint.sh       # Container entrypoint (user-level shell setup, no root)
 │   ├── init-firewall.sh    # iptables/ipset setup from network profile (root only)
+│   ├── github-auth.sh      # GitHub App PEM → installation token exchange (root only)
 │   ├── allow-domain        # Hot-add domain to allowlist (root only, no restart)
 │   ├── deny-domain         # Hot-remove domain from allowlist (root only)
 │   └── list-allowed        # Show current allowlist (root only)
@@ -51,7 +52,7 @@ The agent process runs as the unprivileged `agent` user inside the container:
 - **Network policies are operator-only** — only the operator can modify the allowlist via `docker exec -u root` from the host
 - **Firewall init happens before the agent session** — `harness.sh` starts the container detached, inits firewall as root, then attaches the agent session. The agent process never runs as root.
 - **Fail-closed** — if firewall initialization fails, the container is stopped. It never runs without network isolation.
-- **Credentials are mounted, not baked** — SSH keys read-only, per-agent config dirs isolated from host and from each other
+- **Credentials are mounted, not baked** — GitHub App PEM root-only, per-agent config dirs isolated from host and from each other
 - **Phase-enforced mount modes** — plan and review force read-only on repos regardless of what the operator passes
 
 ## Launch sequence (what harness.sh does)
@@ -67,7 +68,8 @@ The agent process runs as the unprivileged `agent` user inside the container:
 
 - Never push without explicit user authorization
 - The harness enforces repo mount modes: plan and review force read-only on repos regardless of what the user passes
-- SSH keys are mounted read-only, scoped to a deploy key (not personal keyring)
+- Git auth uses GitHub App installation tokens (HTTPS), not SSH keys
+- The GitHub App PEM is mounted root-only; the agent user cannot read it directly
 - Network profiles are loaded at container start via init-firewall.sh
 - Domains can be added/removed at runtime by the operator without container restart
 

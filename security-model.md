@@ -12,7 +12,7 @@ The harness protects against an AI coding agent (Claude Code, Codex) that goes o
 
 **Out of scope (accepted risks):**
 - Agent makes API calls as the user (Anthropic/OpenAI) — necessary for function
-- Agent pushes to repos the deploy SSH key has access to — necessary for dev workflow
+- Agent pushes to repos the GitHub App is installed on — necessary for dev workflow
 - Agent reaches host-side MCP servers — necessary for tooling (Plane, trnscrb)
 
 ## Isolation layers
@@ -25,7 +25,7 @@ The agent only sees what is explicitly mounted:
 |---|---|---|
 | Repo(s) | rw (dev) / ro (plan, review) | Code the agent works on |
 | Cookbooks | rw | Specs, reports, prompts |
-| SSH deploy key | ro | Git push/pull to specific repos |
+| GitHub App PEM | ro (root-only) | Derives short-lived tokens for git push/pull and gh CLI |
 | Agent config dir | rw (per-agent temp copy) | Session state, not host config |
 | Agent credentials | ro (seeded copy) | Auth tokens for Claude/Codex |
 
@@ -106,14 +106,18 @@ If multiple users share the same host, one user's container can reach another us
 | Credential | How exposed | Risk |
 |---|---|---|
 | Claude/Codex auth tokens | Mounted read-only from per-agent temp copy | Agent can make API calls as the user. Unavoidable. |
-| SSH deploy key | Mounted read-only, single key | Agent can push/pull to repos the key has access to. Scoped by design. |
+| GitHub App installation token | Configured in git/gh by `github-auth.sh` at startup | Agent can push/pull and create PRs on repos the app is installed on. Token expires in ~1 hour. |
 | MCP OAuth tokens | Inside mounted config files | Agent can call OAuth-protected MCP servers. Token refresh handled silently. |
+
+**Note on GitHub App credentials**: The PEM private key is mounted read-only at `/etc/harness/github-app.pem` and is only readable by root. The agent user cannot read the PEM directly — it only sees the derived installation token configured in git/gh. If the installation token is compromised, it expires in ~1 hour and is scoped to the app's permissions (Contents, Pull requests, Actions read-only, Metadata).
 
 ### What's NOT exposed
 
 | Credential | Why not |
 |---|---|
-| Personal SSH keyring (`~/.ssh/`) | Only the deploy key is mounted, not the directory |
+| GitHub App PEM private key | Mounted read-only, root-owned. Agent user cannot read it. |
+| Personal SSH keyring (`~/.ssh/`) | Not mounted. Git uses HTTPS with GitHub App token, not SSH. |
+| GitHub PATs | Not used. GitHub App replaces personal access tokens. |
 | AWS/Azure/GCP credentials | `~/.aws/`, `~/.azure/`, `~/.config/gcloud/` not mounted |
 | Browser cookies/sessions | Host browser state not accessible from container |
 | Other agent sessions | Each agent gets its own temp config dir; sessions are not shared |
@@ -143,7 +147,7 @@ These are accepted risks that the harness does not mitigate:
 | Concern | Bare host | Harness |
 |---|---|---|
 | Agent reads `~/.aws/credentials` | Possible | Blocked (not mounted) |
-| Agent reads `~/.ssh/id_rsa` | Possible | Blocked (only deploy key mounted) |
+| Agent reads `~/.ssh/id_rsa` | Possible | Blocked (SSH not used, no keys mounted) |
 | Malicious dep phones home to attacker server | Unrestricted | Blocked (not in allowlist) |
 | Agent writes to files outside repo | Possible | Blocked (only mounted paths visible) |
 | Agent scans local network | Unrestricted | Allowed on host network only (Docker bridge) |

@@ -23,7 +23,7 @@ PHASE=""
 PROJECT=""
 AGENT="claude-code"
 NETWORK_PROFILE=""
-SSH_KEY="${HARNESS_SSH_KEY:-}"
+GITHUB_APP_PEM="${GITHUB_APP_PEM:-}"
 SPEC=""
 BRANCHES=""
 PARALLEL=false
@@ -52,17 +52,16 @@ OPTIONS:
   --repos <path:mode>      Repository to mount. Mode is rw or ro. Repeatable.
   --agent <name>           Agent to use: claude-code (default) or codex
   --network-profile <name> Network profile: default, plan, python-dev, node-dev, review-only
-  --ssh-key <path>         SSH deploy key to mount (read-only)
   --spec <path>            Spec file path (dev phase)
   --branches <b1,b2,...>   Branches to review (review phase)
   --parallel               Enable parallel worktree execution (dev phase)
   --name <name>            Container name (default: harness-<phase>-<timestamp>)
 
 ENVIRONMENT:
-  COOKBOOKS_PATH           Path to your context/notes repo (required, mounted at /cookbooks)
-  HARNESS_SSH_KEY          Default SSH key path
-  ANTHROPIC_API_KEY        Claude Code API key
-  OPENAI_API_KEY           Codex API key
+  COOKBOOKS_PATH                 Path to your context/notes repo (required)
+  GITHUB_APP_ID                  GitHub App ID (for git push/pull and gh CLI)
+  GITHUB_APP_INSTALLATION_ID     GitHub App Installation ID
+  GITHUB_APP_PEM                 Path to GitHub App private key PEM file
 EOF
   exit 1
 }
@@ -89,7 +88,6 @@ while [[ $# -gt 0 ]]; do
     --repos)      REPOS+=("$2"); shift 2 ;;
     --agent)      AGENT="$2"; shift 2 ;;
     --network-profile) NETWORK_PROFILE="$2"; shift 2 ;;
-    --ssh-key)    SSH_KEY="$2"; shift 2 ;;
     --spec)       SPEC="$2"; shift 2 ;;
     --branches)   BRANCHES="$2"; shift 2 ;;
     --parallel)   PARALLEL=true; shift ;;
@@ -167,13 +165,14 @@ elif [[ "$AGENT" == "codex" ]]; then
   DOCKER_ARGS+=("-v" "$AGENT_TMPDIR/.codex:/home/agent/.codex:rw")
 fi
 
-# SSH key mount
-if [[ -n "$SSH_KEY" ]]; then
-  [[ -f "$SSH_KEY" ]] || die "SSH key not found: $SSH_KEY"
-  DOCKER_ARGS+=("-v" "$SSH_KEY:/home/agent/.ssh/id_ed25519:ro")
-  # Mount known_hosts if it exists alongside the key
-  SSH_DIR=$(dirname "$SSH_KEY")
-  [[ -f "$SSH_DIR/known_hosts" ]] && DOCKER_ARGS+=("-v" "$SSH_DIR/known_hosts:/home/agent/.ssh/known_hosts:ro")
+# GitHub App credentials (for git HTTPS push/pull and gh CLI)
+if [[ -n "${GITHUB_APP_ID:-}" && -n "${GITHUB_APP_INSTALLATION_ID:-}" && -n "$GITHUB_APP_PEM" ]]; then
+  GITHUB_APP_PEM="${GITHUB_APP_PEM/#\~/$HOME}"
+  [[ -f "$GITHUB_APP_PEM" ]] || die "GitHub App PEM not found: $GITHUB_APP_PEM"
+  DOCKER_ARGS+=("-v" "$GITHUB_APP_PEM:/etc/harness/github-app.pem:ro")
+  DOCKER_ARGS+=("-e" "GITHUB_APP_ID=$GITHUB_APP_ID")
+  DOCKER_ARGS+=("-e" "GITHUB_APP_INSTALLATION_ID=$GITHUB_APP_INSTALLATION_ID")
+  DOCKER_ARGS+=("-e" "GITHUB_APP_PEM_PATH=/etc/harness/github-app.pem")
 fi
 
 # Cookbooks mount (always read-write — all phases write to it)
@@ -259,9 +258,18 @@ if ! docker exec -u root "$CONTAINER_NAME" /usr/local/bin/init-firewall.sh "$NET
   die "Cannot start without network isolation."
 fi
 
-# Step 3: Attach interactive session as agent user
-info "Firewall active. Attaching to container as agent user..."
+# Step 3: Initialize GitHub App auth as root (if configured)
+if docker exec "$CONTAINER_NAME" printenv GITHUB_APP_ID &>/dev/null; then
+  info "Configuring GitHub App authentication..."
+  if ! docker exec -u root "$CONTAINER_NAME" /usr/local/bin/github-auth.sh; then
+    warn "GitHub App auth failed — git push/pull and gh CLI may not work"
+  fi
+fi
+
+# Step 4: Attach interactive session as agent user
+info "Attaching to container as agent user..."
 info "To allow a domain at runtime: docker exec -u root $CONTAINER_NAME allow-domain <domain>"
+info "To refresh GitHub token (after 1h): docker exec -u root $CONTAINER_NAME /usr/local/bin/github-auth.sh"
 echo ""
 
 docker exec -it -u agent "$CONTAINER_NAME" /usr/local/bin/entrypoint.sh zsh

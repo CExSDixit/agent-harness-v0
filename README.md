@@ -100,34 +100,31 @@ my-context-repo/
 # 1. Build the image
 docker build -t agent-harness:latest .
 
-# 2. Configure your context repo path
-export COOKBOOKS_PATH=~/git/my-context-repo
+# 2. Configure (see Configuration section below)
+cp .env.example .env
+# Edit .env with your paths and GitHub App credentials
+source .env
 
 # 3. Launch a dev agent
 ./harness.sh dev \
   --project my-org/my-project \
   --repos ~/git/my-app:rw \
   --agent claude-code \
-  --ssh-key ~/.ssh/id_ed25519_deploy \
   --spec /cookbooks/my-org/my-project/PROJ-1-feature.md
 ```
 
 ## Configuration
 
-The harness requires one environment variable:
+Copy `.env.example` to `.env`, fill in your values, then `source .env` before running `harness.sh`.
 
 | Variable | Required | Description |
 |---|---|---|
-| `COOKBOOKS_PATH` | Yes | Path to your context/notes repo. Mounted at `/cookbooks` in the container. This is where specs, review reports, and prompts live. |
-| `HARNESS_SSH_KEY` | No | Default SSH deploy key path. Used if `--ssh-key` is not provided. |
+| `COOKBOOKS_PATH` | Yes | Path to your context/notes repo. Mounted at `/cookbooks` in the container. |
+| `GITHUB_APP_ID` | No | GitHub App ID. Enables git push/pull (HTTPS) and `gh` CLI inside containers. |
+| `GITHUB_APP_INSTALLATION_ID` | No | GitHub App Installation ID (from the org where the app is installed). |
+| `GITHUB_APP_PEM` | No | Path to the GitHub App private key PEM file on your host. |
 
-Copy `.env.example` and configure:
-
-```bash
-cp .env.example .env
-# Edit .env with your paths, then:
-source .env
-```
+If GitHub App credentials are not set, the container will have no git push/pull or `gh` CLI access. This is fine for plan and review phases that only read repos.
 
 ## Phases
 
@@ -155,7 +152,6 @@ Implement from a spec. Repos are mounted with the mode you specify.
   --project my-org/my-project \
   --repos ~/git/my-app:rw \
   --agent claude-code \
-  --ssh-key ~/.ssh/id_ed25519_deploy \
   --spec /cookbooks/my-org/my-project/PROJ-1-feature.md
 ```
 
@@ -168,7 +164,6 @@ For parallel execution across multiple specs/branches:
   --project my-org/my-project \
   --repos ~/git/my-app:rw ~/git/my-other-repo:rw \
   --agent codex \
-  --ssh-key ~/.ssh/id_ed25519_deploy \
   --spec /cookbooks/my-org/my-project/PROJ-1-feature.md,/cookbooks/my-org/my-project/PROJ-2-bugfix.md \
   --parallel
 ```
@@ -202,15 +197,16 @@ OPTIONS:
   --repos <path:mode>      Repository to mount. Mode is rw or ro. Repeatable.
   --agent <name>           Agent: claude-code (default) or codex
   --network-profile <name> Network profile (see below). Overrides phase default.
-  --ssh-key <path>         SSH deploy key to mount (read-only)
   --spec <path>            Spec file path (dev phase, required)
   --branches <b1,b2,...>   Branches to review (review phase, required)
   --parallel               Enable parallel worktree execution (dev phase)
   --name <name>            Container name (default: harness-<phase>-<timestamp>)
 
 ENVIRONMENT VARIABLES:
-  COOKBOOKS_PATH           Path to your context/notes repo (required, mounted at /cookbooks)
-  HARNESS_SSH_KEY          Default SSH key path (used if --ssh-key not provided)
+  COOKBOOKS_PATH                 Path to your context/notes repo (required)
+  GITHUB_APP_ID                  GitHub App ID
+  GITHUB_APP_INSTALLATION_ID     GitHub App Installation ID
+  GITHUB_APP_PEM                 Path to GitHub App private key PEM file
 ```
 
 ## Network Profiles
@@ -282,15 +278,65 @@ docker ps --filter "name=harness-" --format "{{.Names}}"
 
 ## Credential Setup (One-Time)
 
-### SSH deploy key
+### GitHub App (for git push/pull and `gh` CLI)
 
-Create a key scoped to the repos you want the agent to access:
+A GitHub App provides a single identity for all repos — no per-repo SSH deploy keys, no personal access tokens. The app generates short-lived installation tokens (~1 hour) that work for both `git` (over HTTPS) and the `gh` CLI.
+
+**Step 1: Create the GitHub App**
+
+1. Go to your GitHub org → **Settings → Developer settings → GitHub Apps → New GitHub App**
+2. Fill in:
+   - **Name**: `agent-harness` (must be globally unique)
+   - **Homepage URL**: your org URL (required but not important)
+   - **Webhook**: uncheck "Active"
+3. **Repository permissions**:
+   - Contents: Read and write
+   - Pull requests: Read and write
+   - Actions: Read-only
+   - Metadata: Read-only (auto-selected)
+4. **Where can this app be installed?**: "Only on this account"
+5. Create the app
+
+**Step 2: Note the App ID**
+
+On the app's settings page after creation, copy the **App ID** (a number).
+
+**Step 3: Generate a private key**
+
+On the same page → **Private keys → Generate a private key**. A `.pem` file downloads:
 
 ```bash
-ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519_deploy -C "agent-harness-deploy"
+mkdir -p ~/.config/harness
+mv ~/Downloads/<app-name>.*.private-key.pem ~/.config/harness/github-app.pem
+chmod 600 ~/.config/harness/github-app.pem
 ```
 
-Add it as a deploy key on each GitHub repo (Settings > Deploy keys). Grant write access for repos the dev agent needs to push to.
+**Step 4: Install the app on your repos**
+
+1. App settings → **Install App** (left sidebar)
+2. Install on your org
+3. Choose **Only select repositories** → pick the repos agents will work on
+4. Install
+
+**Step 5: Note the Installation ID**
+
+After installing, the URL is `github.com/organizations/<org>/settings/installations/<ID>`. That number is the **Installation ID**.
+
+**Step 6: Configure your `.env`**
+
+```bash
+GITHUB_APP_ID=<your app id>
+GITHUB_APP_INSTALLATION_ID=<your installation id>
+GITHUB_APP_PEM=~/.config/harness/github-app.pem
+```
+
+**How it works at runtime**: `harness.sh` mounts the PEM file read-only into the container and passes the app/installation IDs as env vars. Before the agent session starts, `github-auth.sh` runs as root: it creates a JWT signed with the PEM, exchanges it for a short-lived installation token via the GitHub API, and configures `git` (HTTPS) and `gh` with that token. The agent never sees the PEM — only the derived token.
+
+**Token expiry**: Installation tokens expire after ~1 hour. For sessions longer than that, refresh from the host:
+
+```bash
+docker exec -u root <container-name> /usr/local/bin/github-auth.sh
+```
 
 ### Claude Code / Codex auth
 
@@ -306,6 +352,16 @@ codex
 
 For OAuth-protected MCP servers, connect to them on the host first so the token is cached. The container uses the cached token; no browser flow runs inside the container.
 
+### Why a GitHub App instead of SSH keys or PATs
+
+| Approach | Drawbacks |
+|---|---|
+| **SSH deploy keys** | One key per repo (GitHub enforces uniqueness). Multiple repos = multiple keys + SSH config with host aliases. Operational burden scales with repos. |
+| **Fine-grained PAT** | Scoped to repos and permissions, but it's a long-lived token tied to your personal account. If leaked, it's your identity. Must be stored in a `gh` config file. |
+| **GitHub App** | One identity across all installed repos. Short-lived tokens (~1h). Permissions scoped at the app level. PEM stays on host (mounted read-only). If the token leaks, it expires in an hour. |
+
+The GitHub App approach is the recommended mechanism for this harness. SSH keys and PATs work but require more configuration and have weaker security properties.
+
 ## How It Works
 
 `harness.sh` does the following:
@@ -314,8 +370,9 @@ For OAuth-protected MCP servers, connect to them on the host first so the token 
 2. Starts the container **detached** (`sleep infinity`)
 3. Initializes the firewall **as root** via `docker exec -u root` with the selected network profile
 4. If firewall init fails, stops the container and exits (**fail-closed** — never runs without network isolation)
-5. Attaches an interactive session **as the `agent` user** via `docker exec -it -u agent`
-6. On exit: stops the container, cleans up the temp config directory
+5. Runs `github-auth.sh` as root — exchanges PEM for a short-lived installation token, configures `git` and `gh`
+6. Attaches an interactive session **as the `agent` user** via `docker exec -it -u agent`
+7. On exit: stops the container, cleans up the temp config directory
 
 The agent process never runs as root. The agent user has no sudo access. Only the operator can modify network policies.
 

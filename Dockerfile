@@ -68,13 +68,23 @@ RUN mkdir -p /workspace /repos /cookbooks /specs /commandhistory && \
   touch /commandhistory/.zsh_history && \
   chown -R "$USERNAME":"$USERNAME" /workspace /repos /cookbooks /specs /commandhistory
 
-# Copy firewall and helper scripts
+# Install GitHub CLI
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+  -o /usr/share/keyrings/githubcli-archive-keyring.gpg && \
+  echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+  > /etc/apt/sources.list.d/github-cli.list && \
+  apt-get update && apt-get install -y --no-install-recommends gh && \
+  apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Copy firewall, auth, and helper scripts
 COPY scripts/init-firewall.sh /usr/local/bin/init-firewall.sh
+COPY scripts/github-auth.sh /usr/local/bin/github-auth.sh
 COPY scripts/allow-domain /usr/local/bin/allow-domain
 COPY scripts/deny-domain /usr/local/bin/deny-domain
 COPY scripts/list-allowed /usr/local/bin/list-allowed
 COPY profiles/ /etc/harness/profiles/
 RUN chmod +x /usr/local/bin/init-firewall.sh \
+  /usr/local/bin/github-auth.sh \
   /usr/local/bin/allow-domain \
   /usr/local/bin/deny-domain \
   /usr/local/bin/list-allowed
