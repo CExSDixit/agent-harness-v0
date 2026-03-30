@@ -89,6 +89,8 @@ my-context-repo/
 
 **Why a separate repo?** Because specs, review reports, and notes span multiple code repos. If you're working on a system with a backend repo and an Airflow repo, the spec that describes work across both lives in the context repo, not in either code repo. It's also where adversarial review reports are written — the review agent has read-only access to code repos but read-write access to the context repo.
 
+**The context repo is yours to manage.** The harness doesn't impose a structure — it only controls read/write permissions (always read-write for the context repo across all phases). How you organize specs, prompts, review templates, notes, and project folders is entirely your choice. The `--project` flag is just a hint for MCP config resolution, not a required directory layout.
+
 ## Prerequisites
 
 - Docker Desktop, OrbStack, or Colima (any Docker runtime)
