@@ -103,6 +103,26 @@ else
     done <<< "$ips"
   done < "$PROFILE_FILE"
 
+  # If github.com or api.github.com is in the profile, fetch all GitHub CIDR ranges
+  # GitHub uses Anycast — DNS returns different IPs on each resolution.
+  # The meta API provides all possible IP ranges for web, API, and git traffic.
+  if grep -qE "^(github\.com|api\.github\.com)$" "$PROFILE_FILE" 2>/dev/null; then
+    echo "[firewall] Fetching GitHub IP ranges from meta API..."
+    GH_META=$(curl -sf --connect-timeout 10 https://api.github.com/meta 2>/dev/null || true)
+    if [[ -n "$GH_META" ]]; then
+      echo "$GH_META" | jq -r '(.web + .api + .git + .packages + .actions)[]' 2>/dev/null | while read -r cidr; do
+        # Only add IPv4 CIDRs
+        if [[ "$cidr" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+$ ]]; then
+          ipset add allowed-domains "$cidr" 2>/dev/null || true
+        fi
+      done
+      GH_COUNT=$(echo "$GH_META" | jq -r '(.web + .api + .git + .packages + .actions)[]' 2>/dev/null | grep -c "^[0-9]" || echo 0)
+      echo "[firewall] Added $GH_COUNT GitHub CIDR ranges"
+    else
+      echo "[firewall] Warning: could not fetch GitHub meta (api.github.com may not be resolved yet)"
+    fi
+  fi
+
   # Set default policies
   iptables -P INPUT DROP
   iptables -P FORWARD DROP
