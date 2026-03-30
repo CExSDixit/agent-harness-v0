@@ -3,13 +3,36 @@ set -euo pipefail
 
 # Agent Harness v0 — Container entrypoint
 # Runs as the agent user. No root access.
-# Firewall is already initialized by harness.sh before this runs.
+# Firewall and GitHub auth are initialized by harness.sh before this runs.
 
-# Set up fnm/node in PATH
-export PATH="$HOME/.fnm:$HOME/.local/bin:$PATH"
-eval "$($HOME/.fnm/fnm env 2>/dev/null)" || true
-
-cd /workspace
+# Set working directory based on phase
+case "${HARNESS_ROLE:-review}" in
+  plan)
+    # Planning: work in the context repo where specs are written
+    cd /cookbooks
+    ;;
+  dev)
+    # Development: work in the first mounted repo
+    FIRST_REPO=$(ls /repos/ 2>/dev/null | head -1)
+    if [[ -n "$FIRST_REPO" ]]; then
+      cd "/repos/$FIRST_REPO"
+    else
+      cd /workspace
+    fi
+    ;;
+  review)
+    # Review: work in the first mounted repo (read-only)
+    FIRST_REPO=$(ls /repos/ 2>/dev/null | head -1)
+    if [[ -n "$FIRST_REPO" ]]; then
+      cd "/repos/$FIRST_REPO"
+    else
+      cd /workspace
+    fi
+    ;;
+  *)
+    cd /workspace
+    ;;
+esac
 
 # Execute the provided command (default: zsh)
 exec "$@"
