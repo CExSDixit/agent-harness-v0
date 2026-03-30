@@ -16,6 +16,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 IMAGE_NAME="agent-harness:latest"
+
+# Auto-source .env if it exists (won't override already-set vars)
+[[ -f "$SCRIPT_DIR/.env" ]] && set -a && source "$SCRIPT_DIR/.env" && set +a
+
 COOKBOOKS_PATH="${COOKBOOKS_PATH:-}"
 
 # Defaults
