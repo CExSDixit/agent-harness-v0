@@ -93,8 +93,75 @@ my-context-repo/
 
 ## Prerequisites
 
-- Docker Desktop, OrbStack, or Colima (any Docker runtime)
-- Claude Code CLI and/or Codex CLI installed on the host (for pre-caching credentials)
+### Host dependencies
+
+`harness.sh` runs on your host machine and requires:
+
+| Dependency | Why | Install |
+|---|---|---|
+| **Docker** | Container runtime | [Docker Desktop](https://docker.com/products/docker-desktop), [OrbStack](https://orbstack.dev), or [Colima](https://github.com/abiosoft/colima) |
+| **Python 3** | Config sanitization (JSON/TOML rewriting) | Pre-installed on macOS. `brew install python3` or `apt install python3` |
+| **jq** | GitHub meta API parsing in firewall init | `brew install jq` or `apt install jq` |
+| **Bash 4+** | harness.sh uses arrays and `${var:+...}` syntax | Pre-installed on Linux. macOS ships Bash 3 — `brew install bash` or use zsh |
+
+Standard utilities also used: `curl`, `sed`, `cp`, `mkdir`, `mktemp`, `basename`, `dirname` (all pre-installed on macOS and Linux).
+
+### Agent setup on host
+
+The harness mounts credentials from your host machine into containers. You must have the agents installed and authenticated on the host **before** using the harness.
+
+**Claude Code:**
+```bash
+# Install
+curl -fsSL https://claude.ai/install.sh | bash
+
+# Authenticate (opens browser)
+claude
+
+# Generate container token (required — Claude Code stores auth in macOS Keychain, not files)
+claude setup-token
+# Copy the token into your .env as CLAUDE_CODE_OAUTH_TOKEN
+```
+
+**Codex:**
+```bash
+# Install
+npm install -g @openai/codex
+
+# Authenticate (opens browser)
+codex
+
+# For OAuth MCP servers, authenticate each one:
+codex mcp login <server-name>
+```
+
+### How harness.sh picks up agent configs
+
+When you launch a container, `harness.sh` copies and sanitizes your host agent configs into an isolated per-container temp directory. Nothing is shared between containers or written back to your host.
+
+**Claude Code** — files picked up from host:
+
+| Host path | What it contains | How it's used |
+|---|---|---|
+| `~/.claude.json` | Account metadata, MCP server configs (global + per-project) | Copied and sanitized: project paths remapped to container paths, `localhost` → `host.docker.internal`, hardware-dependent STDIO MCP servers rewritten to SSE |
+| `~/.claude/settings.json` | Permission settings, tool allowlists | Copied as-is |
+| `CLAUDE_CODE_OAUTH_TOKEN` env var | OAuth token (from `claude setup-token`) | Passed as env var — this is the actual auth credential |
+
+**Codex** — files picked up from host:
+
+| Host path | What it contains | How it's used |
+|---|---|---|
+| `~/.codex/config.toml` | Model settings, MCP server configs | Copied and sanitized: `localhost` → `host.docker.internal`, `[projects.*]` sections stripped (host paths don't exist in container) |
+| `~/.codex/auth.json` | OAuth tokens (OpenAI + MCP servers) | Copied read-write (Codex refreshes tokens in place) |
+| `<repo>/.codex/auth.json` | Project-specific OAuth tokens | Copied if present in mounted repos |
+
+**MCP servers** in your config are handled based on type:
+- **STDIO servers** with host-hardware dependencies (e.g., `trnscrb`): rewritten to SSE transport pointing to `host.docker.internal`
+- **STDIO servers** that are pure API tools (e.g., `plane`): kept as-is (binary installed in image)
+- **HTTP/SSE servers**: `localhost` URLs rewritten to `host.docker.internal`
+- **Remote HTTP servers**: kept as-is (URL already points to remote endpoint)
+
+To add a new MCP server that the harness should know about, configure it in your host's Claude Code or Codex config as normal. The harness picks it up automatically on next launch. If the server needs a new domain allowed through the firewall, add it to the relevant `profiles/*.conf` file and rebuild the image.
 
 ## Quick Start
 
