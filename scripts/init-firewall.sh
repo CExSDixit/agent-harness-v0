@@ -57,16 +57,31 @@ iptables -A INPUT -p udp --sport 53 -j ACCEPT
 iptables -A INPUT -i lo -j ACCEPT
 iptables -A OUTPUT -o lo -j ACCEPT
 
-# 4. Allow host network (Docker bridge) — needed for:
-#    - VS Code devcontainer server-client communication
+# 5. Allow host network — needed for:
 #    - MCP servers running on the host (trnscrb, Plane, etc. via host.docker.internal)
+#    - VS Code devcontainer server-client communication
 #    - DNS forwarding fallback (Docker embedded DNS → host resolver)
+#
+# Docker Desktop on macOS routes host.docker.internal through 192.168.65.0/24
+# (the VM's internal network), NOT the Docker bridge (172.17.0.0/24).
+# We must allow both subnets.
 HOST_IP=$(ip route 2>/dev/null | grep default | cut -d" " -f3 || true)
 if [[ -n "$HOST_IP" ]]; then
   HOST_NETWORK=$(echo "$HOST_IP" | sed "s/\.[0-9]*$/.0\/24/")
-  echo "[firewall] Allowing host network: $HOST_NETWORK"
+  echo "[firewall] Allowing Docker bridge: $HOST_NETWORK"
   iptables -A INPUT -s "$HOST_NETWORK" -j ACCEPT
   iptables -A OUTPUT -d "$HOST_NETWORK" -j ACCEPT
+fi
+
+# Also allow host.docker.internal IP (may be on a different subnet on Docker Desktop macOS)
+HDI_IP=$(getent hosts host.docker.internal 2>/dev/null | awk '{print $1}' || true)
+if [[ -n "$HDI_IP" && "$HDI_IP" != "$HOST_IP" ]]; then
+  HDI_NETWORK=$(echo "$HDI_IP" | sed "s/\.[0-9]*$/.0\/24/")
+  if [[ "$HDI_NETWORK" != "$HOST_NETWORK" ]]; then
+    echo "[firewall] Allowing host.docker.internal network: $HDI_NETWORK"
+    iptables -A INPUT -s "$HDI_NETWORK" -j ACCEPT
+    iptables -A OUTPUT -d "$HDI_NETWORK" -j ACCEPT
+  fi
 fi
 
 # 5. Branch based on profile type
