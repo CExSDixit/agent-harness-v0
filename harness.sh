@@ -157,10 +157,6 @@ DOCKER_ARGS=(
   "-e" "HARNESS_AGENT=$AGENT"
 )
 
-# API keys via env
-[[ -n "${ANTHROPIC_API_KEY:-}" ]] && DOCKER_ARGS+=("-e" "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY")
-[[ -n "${OPENAI_API_KEY:-}" ]] && DOCKER_ARGS+=("-e" "OPENAI_API_KEY=$OPENAI_API_KEY")
-
 # Agent config mounts
 if [[ "$AGENT" == "claude-code" ]]; then
   DOCKER_ARGS+=("-v" "$AGENT_TMPDIR/.claude:/home/agent/.claude:rw")
@@ -212,7 +208,7 @@ if [[ "$PHASE" == "review" ]]; then
   DOCKER_ARGS+=("-e" "HARNESS_BRANCHES=$BRANCHES")
 fi
 
-# Image and command
+# Image and command — start detached first so we can init firewall as root
 DOCKER_ARGS+=("$IMAGE_NAME")
 
 # --- Launch ---
@@ -226,13 +222,50 @@ info "Repos:    ${REPOS[*]}"
 [[ "$PARALLEL" == "true" ]] && info "Parallel: enabled"
 info "Container: $CONTAINER_NAME"
 echo ""
-info "Launching container..."
-info "To allow a domain at runtime: docker exec $CONTAINER_NAME allow-domain <domain>"
+
+# Step 1: Start container detached (keeps it alive via sleep)
+info "Starting container..."
+# Replace -it with -d, override CMD to keep container alive
+DOCKER_ARGS_DETACHED=("${DOCKER_ARGS[@]}")
+# Remove "-it" and add "-d", override command to sleep
+DOCKER_DETACH_ARGS=(
+  "run" "--rm" "-d"
+  "--name" "$CONTAINER_NAME"
+  "--cap-add=NET_ADMIN"
+  "--cap-add=NET_RAW"
+)
+# Re-add all -e and -v flags from DOCKER_ARGS (skip run, --rm, -it, --name, --cap-add, image)
+for ((i=0; i<${#DOCKER_ARGS[@]}; i++)); do
+  case "${DOCKER_ARGS[$i]}" in
+    run|--rm|-it|-d) continue ;;
+    --name) ((i++)); continue ;;  # skip --name and its value
+    --cap-add=*) continue ;;
+    "$IMAGE_NAME") continue ;;
+    *) DOCKER_DETACH_ARGS+=("${DOCKER_ARGS[$i]}") ;;
+  esac
+done
+DOCKER_DETACH_ARGS+=("$IMAGE_NAME" "sleep" "infinity")
+
+docker "${DOCKER_DETACH_ARGS[@]}" >/dev/null
+
+# Step 2: Initialize firewall as root (agent user cannot do this)
+info "Initializing firewall as root (profile: $NETWORK_PROFILE)..."
+if ! docker exec -u root "$CONTAINER_NAME" /usr/local/bin/init-firewall.sh "$NETWORK_PROFILE"; then
+  warn "FATAL: Firewall initialization failed. Stopping container."
+  docker stop "$CONTAINER_NAME" >/dev/null 2>&1 || true
+  rm -rf "$AGENT_TMPDIR"
+  die "Cannot start without network isolation."
+fi
+
+# Step 3: Attach interactive session as agent user
+info "Firewall active. Attaching to container as agent user..."
+info "To allow a domain at runtime: docker exec -u root $CONTAINER_NAME allow-domain <domain>"
 echo ""
 
-docker "${DOCKER_ARGS[@]}"
+docker exec -it -u agent "$CONTAINER_NAME" /usr/local/bin/entrypoint.sh zsh
 
 # Cleanup
-info "Container exited. Cleaning up agent config dir..."
+info "Session ended. Stopping container..."
+docker stop "$CONTAINER_NAME" >/dev/null 2>&1 || true
 rm -rf "$AGENT_TMPDIR"
 info "Done."

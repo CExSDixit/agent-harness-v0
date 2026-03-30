@@ -59,9 +59,9 @@ RUN ARCH=$(dpkg --print-architecture) && \
 
 # Create agent user (non-root)
 ARG USERNAME=agent
-RUN useradd -m -s /bin/zsh -G sudo "$USERNAME" && \
-  echo "$USERNAME ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/"$USERNAME" && \
-  chmod 0440 /etc/sudoers.d/"$USERNAME"
+RUN useradd -m -s /bin/zsh "$USERNAME"
+# No sudo access for the agent user. All privileged operations (firewall init,
+# domain allow/deny) are performed by the operator via `docker exec -u root`.
 
 # Create working directories
 RUN mkdir -p /workspace /repos /cookbooks /specs /commandhistory && \
@@ -79,8 +79,9 @@ RUN chmod +x /usr/local/bin/init-firewall.sh \
   /usr/local/bin/deny-domain \
   /usr/local/bin/list-allowed
 
-# Allow agent user to run firewall scripts without password
-RUN echo "$USERNAME ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh" >> /etc/sudoers.d/"$USERNAME"
+# Firewall scripts are operator-only (run via `docker exec` from host as root).
+# The agent user intentionally CANNOT modify network policies.
+# init-firewall.sh runs as root via entrypoint before dropping to agent user.
 
 ENV DEVCONTAINER=true
 ENV SHELL=/bin/zsh
@@ -129,9 +130,12 @@ ENV HISTFILE=/commandhistory/.zsh_history
 ENV HISTSIZE=200000
 ENV SAVEHIST=200000
 
-# Entrypoint: initialize firewall, then drop into shell
+# Entrypoint: runs as agent user. Firewall is initialized separately.
+# Firewall init happens via harness.sh calling `docker exec -u root` BEFORE
+# the agent session starts. The agent process never has root access.
+USER ${USERNAME}
+
 COPY --chown=${USERNAME}:${USERNAME} scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN sudo chmod +x /usr/local/bin/entrypoint.sh
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["zsh"]

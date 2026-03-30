@@ -22,7 +22,7 @@ for domain in "$@"; do
   count=0
   while read -r ip; do
     if [[ "$ip" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
-      if sudo ipset del allowed-domains "$ip" 2>/dev/null; then
+      if ipset del allowed-domains "$ip" 2>/dev/null; then
         ((count++))
       fi
     fi
