@@ -17,32 +17,23 @@ ARG DEBIAN_FRONTEND=noninteractive
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-# ── System packages (single layer) ──────────────────────────────────────────
+# ── System packages ──────────────────────────────────────────────────────────
 RUN apt-get update && \
-  # Add GitHub CLI apt repo
+  apt-get install -y --no-install-recommends \
+    git curl wget ca-certificates \
+    zsh tmux \
+    ripgrep fd-find fzf jq \
+    build-essential \
+    nano vim \
+    iptables ipset iproute2 dnsutils \
+    unzip less procps man-db \
+  && \
+  # GitHub CLI (needs curl, so must come after base install)
   curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
     -o /usr/share/keyrings/githubcli-archive-keyring.gpg && \
   echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
     > /etc/apt/sources.list.d/github-cli.list && \
-  apt-get update && \
-  apt-get install -y --no-install-recommends \
-    # Core
-    git curl wget ca-certificates \
-    # Shell
-    zsh tmux \
-    # Search tools
-    ripgrep fd-find fzf jq \
-    # Build tools
-    build-essential \
-    # Editors
-    nano vim \
-    # Network policy (iptables + ipset for allowlisting)
-    iptables ipset iproute2 dnsutils \
-    # GitHub CLI
-    gh \
-    # Misc
-    unzip less procps man-db \
-  && \
+  apt-get update && apt-get install -y --no-install-recommends gh && \
   # git-delta
   ARCH=$(dpkg --print-architecture) && \
   curl -fsSL "https://github.com/dandavison/delta/releases/download/0.18.2/git-delta_0.18.2_${ARCH}.deb" \
@@ -102,25 +93,7 @@ RUN \
   npm install -g @anthropic-ai/claude-code@latest @openai/codex@latest
 
 # ── Shell config (.zshrc) ───────────────────────────────────────────────────
-RUN cat > /home/${USERNAME}/.zshrc << 'ZSHRC'
-# Agent Harness — shell configuration
-export PATH="$HOME/.fnm:$HOME/.local/bin:$PATH"
-eval "$($HOME/.fnm/fnm env 2>/dev/null)" || true
-
-# History
-export HISTFILE=/commandhistory/.zsh_history
-export HISTSIZE=200000
-export SAVEHIST=200000
-setopt SHARE_HISTORY HIST_IGNORE_DUPS HIST_REDUCE_BLANKS
-
-# Aliases
-alias fd=fdfind
-alias ll='ls -lah --color=auto'
-alias la='ls -A --color=auto'
-
-# Completion
-autoload -Uz compinit && compinit -u
-ZSHRC
+COPY --chown=${USERNAME}:${USERNAME} scripts/zshrc /home/${USERNAME}/.zshrc
 
 # ── Entrypoint ───────────────────────────────────────────────────────────────
 COPY --chown=${USERNAME}:${USERNAME} scripts/entrypoint.sh /usr/local/bin/entrypoint.sh

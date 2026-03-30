@@ -1,0 +1,17 @@
+# Agent Harness — shell configuration
+export PATH="$HOME/.fnm:$HOME/.local/bin:$PATH"
+eval "$($HOME/.fnm/fnm env 2>/dev/null)" || true
+
+# History
+export HISTFILE=/commandhistory/.zsh_history
+export HISTSIZE=200000
+export SAVEHIST=200000
+setopt SHARE_HISTORY HIST_IGNORE_DUPS HIST_REDUCE_BLANKS
+
+# Aliases
+alias fd=fdfind
+alias ll='ls -lah --color=auto'
+alias la='ls -A --color=auto'
+
+# Completion
+autoload -Uz compinit && compinit -u
