@@ -17,134 +17,112 @@ ARG DEBIAN_FRONTEND=noninteractive
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-# System packages: dev tools + network policy tooling
-RUN apt-get update && apt-get install -y --no-install-recommends \
-  # Core
-  git \
-  curl \
-  wget \
-  sudo \
-  ca-certificates \
-  # Shell
-  zsh \
-  tmux \
-  # Search tools
-  ripgrep \
-  fd-find \
-  fzf \
-  jq \
-  # Build tools
-  build-essential \
-  # Editors
-  nano \
-  vim \
-  # Network policy (iptables + ipset for allowlisting)
-  iptables \
-  ipset \
-  iproute2 \
-  dnsutils \
-  # Misc
-  unzip \
-  less \
-  procps \
-  man-db \
-  && apt-get clean && rm -rf /var/lib/apt/lists/*
+# ── System packages (single layer) ──────────────────────────────────────────
+RUN apt-get update && \
+  # Add GitHub CLI apt repo
+  curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+    -o /usr/share/keyrings/githubcli-archive-keyring.gpg && \
+  echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+    > /etc/apt/sources.list.d/github-cli.list && \
+  apt-get update && \
+  apt-get install -y --no-install-recommends \
+    # Core
+    git curl wget ca-certificates \
+    # Shell
+    zsh tmux \
+    # Search tools
+    ripgrep fd-find fzf jq \
+    # Build tools
+    build-essential \
+    # Editors
+    nano vim \
+    # Network policy (iptables + ipset for allowlisting)
+    iptables ipset iproute2 dnsutils \
+    # GitHub CLI
+    gh \
+    # Misc
+    unzip less procps man-db \
+  && \
+  # git-delta
+  ARCH=$(dpkg --print-architecture) && \
+  curl -fsSL "https://github.com/dandavison/delta/releases/download/0.18.2/git-delta_0.18.2_${ARCH}.deb" \
+    -o /tmp/git-delta.deb && \
+  dpkg -i /tmp/git-delta.deb && rm /tmp/git-delta.deb && \
+  # Cleanup
+  apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# git-delta for better diffs
-ARG GIT_DELTA_VERSION=0.18.2
-RUN ARCH=$(dpkg --print-architecture) && \
-  curl -fsSL "https://github.com/dandavison/delta/releases/download/${GIT_DELTA_VERSION}/git-delta_${GIT_DELTA_VERSION}_${ARCH}.deb" -o /tmp/git-delta.deb && \
-  dpkg -i /tmp/git-delta.deb && \
-  rm /tmp/git-delta.deb
-
-# Create agent user (non-root)
+# ── Agent user (no sudo) ────────────────────────────────────────────────────
 ARG USERNAME=agent
 RUN useradd -m -s /bin/zsh "$USERNAME"
-# No sudo access for the agent user. All privileged operations (firewall init,
-# domain allow/deny) are performed by the operator via `docker exec -u root`.
 
-# Create working directories
+# ── Working directories ─────────────────────────────────────────────────────
 RUN mkdir -p /workspace /repos /cookbooks /specs /commandhistory && \
   touch /commandhistory/.zsh_history && \
   chown -R "$USERNAME":"$USERNAME" /workspace /repos /cookbooks /specs /commandhistory
 
-# Install GitHub CLI
-RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
-  -o /usr/share/keyrings/githubcli-archive-keyring.gpg && \
-  echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
-  > /etc/apt/sources.list.d/github-cli.list && \
-  apt-get update && apt-get install -y --no-install-recommends gh && \
-  apt-get clean && rm -rf /var/lib/apt/lists/*
-
-# Copy firewall, auth, and helper scripts
-COPY scripts/init-firewall.sh /usr/local/bin/init-firewall.sh
-COPY scripts/github-auth.sh /usr/local/bin/github-auth.sh
-COPY scripts/allow-domain /usr/local/bin/allow-domain
-COPY scripts/deny-domain /usr/local/bin/deny-domain
-COPY scripts/list-allowed /usr/local/bin/list-allowed
+# ── Scripts and profiles ─────────────────────────────────────────────────────
+COPY scripts/init-firewall.sh scripts/github-auth.sh \
+     scripts/allow-domain scripts/deny-domain scripts/list-allowed \
+     /usr/local/bin/
 COPY profiles/ /etc/harness/profiles/
-RUN chmod +x /usr/local/bin/init-firewall.sh \
-  /usr/local/bin/github-auth.sh \
-  /usr/local/bin/allow-domain \
-  /usr/local/bin/deny-domain \
-  /usr/local/bin/list-allowed
+RUN chmod +x /usr/local/bin/init-firewall.sh /usr/local/bin/github-auth.sh \
+  /usr/local/bin/allow-domain /usr/local/bin/deny-domain /usr/local/bin/list-allowed
 
-# Firewall scripts are operator-only (run via `docker exec` from host as root).
-# The agent user intentionally CANNOT modify network policies.
-# init-firewall.sh runs as root via entrypoint before dropping to agent user.
-
-ENV DEVCONTAINER=true
-ENV SHELL=/bin/zsh
-ENV EDITOR=nano
-ENV VISUAL=nano
+# ── Environment ──────────────────────────────────────────────────────────────
+ENV DEVCONTAINER=true \
+    SHELL=/bin/zsh \
+    EDITOR=nano \
+    VISUAL=nano \
+    HARNESS_ROLE=developer \
+    HARNESS_NETWORK_PROFILE=default \
+    HISTFILE=/commandhistory/.zsh_history \
+    HISTSIZE=200000 \
+    SAVEHIST=200000
 
 WORKDIR /workspace
 
-# Switch to non-root for tool installations
+# ── User-level tool installations (single layer) ────────────────────────────
 USER "$USERNAME"
 
-ENV PATH="/home/${USERNAME}/.local/bin:$PATH"
-
-# Install uv (Python package manager)
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Install Python 3.13 via uv
-RUN /home/"$USERNAME"/.local/bin/uv python install 3.13 --default
-
-# Install fnm (Fast Node Manager) + Node 22
 ARG NODE_VERSION=22
-ENV FNM_DIR="/home/${USERNAME}/.fnm"
-RUN curl -fsSL https://fnm.vercel.app/install | bash -s -- --install-dir "$FNM_DIR" --skip-shell && \
-  export PATH="$FNM_DIR:$PATH" && \
-  eval "$(fnm env)" && \
+ENV FNM_DIR="/home/${USERNAME}/.fnm" \
+    PATH="/home/${USERNAME}/.fnm:/home/${USERNAME}/.local/bin:$PATH"
+
+RUN \
+  # uv (Python package manager) + Python 3.13
+  curl -LsSf https://astral.sh/uv/install.sh | sh && \
+  uv python install 3.13 --default && \
+  # fnm (Node version manager) + Node
+  curl -fsSL https://fnm.vercel.app/install | bash -s -- --install-dir "$FNM_DIR" --skip-shell && \
+  eval "$($FNM_DIR/fnm env)" && \
   fnm install ${NODE_VERSION} && \
-  fnm default ${NODE_VERSION}
-
-# Install Claude Code
-RUN export PATH="$FNM_DIR:$PATH" && \
+  fnm default ${NODE_VERSION} && \
+  # Claude Code + Codex CLI
   eval "$($FNM_DIR/fnm env)" && \
-  npm install -g @anthropic-ai/claude-code@latest
+  npm install -g @anthropic-ai/claude-code@latest @openai/codex@latest
 
-# Install Codex CLI
-RUN export PATH="$FNM_DIR:$PATH" && \
-  eval "$($FNM_DIR/fnm env)" && \
-  npm install -g @openai/codex@latest
+# ── Shell config (.zshrc) ───────────────────────────────────────────────────
+RUN cat > /home/${USERNAME}/.zshrc << 'ZSHRC'
+# Agent Harness — shell configuration
+export PATH="$HOME/.fnm:$HOME/.local/bin:$PATH"
+eval "$($HOME/.fnm/fnm env 2>/dev/null)" || true
 
-# Environment
-ENV FNM_DIR="/home/${USERNAME}/.fnm"
-ENV HARNESS_ROLE="developer"
-ENV HARNESS_NETWORK_PROFILE="default"
+# History
+export HISTFILE=/commandhistory/.zsh_history
+export HISTSIZE=200000
+export SAVEHIST=200000
+setopt SHARE_HISTORY HIST_IGNORE_DUPS HIST_REDUCE_BLANKS
 
-# Persistent history across rebuilds (when volume-mounted)
-ENV HISTFILE=/commandhistory/.zsh_history
-ENV HISTSIZE=200000
-ENV SAVEHIST=200000
+# Aliases
+alias fd=fdfind
+alias ll='ls -lah --color=auto'
+alias la='ls -A --color=auto'
 
-# Entrypoint: runs as agent user. Firewall is initialized separately.
-# Firewall init happens via harness.sh calling `docker exec -u root` BEFORE
-# the agent session starts. The agent process never has root access.
-USER ${USERNAME}
+# Completion
+autoload -Uz compinit && compinit -u
+ZSHRC
 
+# ── Entrypoint ───────────────────────────────────────────────────────────────
 COPY --chown=${USERNAME}:${USERNAME} scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
