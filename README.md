@@ -433,6 +433,38 @@ For OAuth-protected MCP servers, connect to them on the host first so the token 
 
 The GitHub App approach is the recommended mechanism for this harness. SSH keys and PATs work but require more configuration and have weaker security properties.
 
+## Codex-Specific Notes
+
+### Auth
+
+Codex stores OAuth tokens in `~/.codex/auth.json` (file-based, not Keychain like Claude Code). The harness mounts this file **read-write** so token refresh works inside the container. Authenticate on the host first:
+
+```bash
+codex   # Complete login
+```
+
+### OAuth MCP Servers
+
+For OAuth-protected MCP servers (e.g., ai-cockpit-stage with Entra OAuth), authenticate on the host first:
+
+```bash
+codex mcp login ai-cockpit-stage
+```
+
+The cached tokens in `~/.codex/auth.json` are mounted into the container. The server's domain must be in the network allowlist — either add it to a profile and rebuild, or hot-add at runtime:
+
+```bash
+docker exec -u root <container> allow-domain ai-cockpit-mcp-stage.caseiq.app login.microsoftonline.com
+```
+
+### Config Format
+
+Codex uses TOML (`~/.codex/config.toml`), not JSON. The harness sanitizes it with `sed` (rewriting `localhost` → `host.docker.internal`), not a full TOML parser. Complex config transformations may need manual adjustment.
+
+### Sandbox Interaction
+
+Codex has its own OS-level sandbox (Seatbelt on macOS, Landlock on Linux). Inside a Docker container, the container itself is the sandbox boundary. Codex's sandbox adds defense-in-depth but is not required — the container already restricts filesystem and network access.
+
 ## How It Works
 
 `harness.sh` does the following:
