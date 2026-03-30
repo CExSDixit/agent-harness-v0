@@ -73,10 +73,16 @@ chown "$AGENT_USER":"$AGENT_USER" "$AGENT_GITCONFIG"
 GH_CONFIG_DIR="$AGENT_HOME/.config/gh"
 mkdir -p "$GH_CONFIG_DIR"
 chown -R "$AGENT_USER":"$AGENT_USER" "$GH_CONFIG_DIR"
-su - "$AGENT_USER" -s /bin/bash -c "
+GH_ERR=$(su - "$AGENT_USER" -s /bin/bash -c "
   export PATH=\"$AGENT_HOME/.fnm:$AGENT_HOME/.local/bin:\$PATH\"
   eval \"\$($AGENT_HOME/.fnm/fnm env 2>/dev/null)\" || true
-  echo '$TOKEN' | gh auth login --with-token 2>/dev/null
-" || echo "[github-auth] Warning: gh auth login failed"
+  echo '$TOKEN' | gh auth login --with-token 2>&1
+" 2>&1) || true
 
-echo "[github-auth] GitHub App token configured for user '$AGENT_USER' (expires: $EXPIRES)"
+if echo "$GH_ERR" | grep -qi "error\|failed\|not found"; then
+  echo "[github-auth] Warning: gh auth login had issues (non-blocking): $GH_ERR"
+else
+  echo "[github-auth] gh CLI configured for user '$AGENT_USER'"
+fi
+
+echo "[github-auth] GitHub App token configured (expires: $EXPIRES)"

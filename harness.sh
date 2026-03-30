@@ -128,8 +128,22 @@ if ! docker image inspect "$IMAGE_NAME" &>/dev/null; then
   die "Image '$IMAGE_NAME' not found. Build it first: docker build -t $IMAGE_NAME ."
 fi
 
+# --- Validate repo name uniqueness ---
+SEEN_REPO_NAMES=""
+for repo_spec in "${REPOS[@]}"; do
+  repo_path="${repo_spec%%:*}"
+  repo_path="${repo_path/#\~/$HOME}"
+  rname=$(basename "$repo_path")
+  if echo "$SEEN_REPO_NAMES" | grep -qx "$rname"; then
+    die "Repo name collision: '$rname' would be mounted twice (/repos/$rname). Use repos with distinct directory names."
+  fi
+  SEEN_REPO_NAMES="$SEEN_REPO_NAMES
+$rname"
+done
+
 # --- Create per-agent isolated config ---
 AGENT_TMPDIR=$(mktemp -d "${TMPDIR:-/tmp}/harness-agent-XXXXXX")
+trap 'rm -rf "$AGENT_TMPDIR" 2>/dev/null' EXIT
 info "Agent config dir: $AGENT_TMPDIR"
 
 # Seed credentials based on agent type
@@ -157,9 +171,17 @@ if [[ "$AGENT" == "claude-code" ]]; then
     python3 -c "
 import json, sys, re
 
-with open(sys.argv[1]) as f:
-    d = json.load(f)
-path_map = json.loads(sys.argv[3])
+try:
+    with open(sys.argv[1]) as f:
+        d = json.load(f)
+except (json.JSONDecodeError, IOError) as e:
+    print(f'[sanitize] ERROR: Failed to read {sys.argv[1]}: {e}', file=sys.stderr)
+    sys.exit(1)
+try:
+    path_map = json.loads(sys.argv[3])
+except json.JSONDecodeError as e:
+    print(f'[sanitize] ERROR: Invalid path map JSON: {e}', file=sys.stderr)
+    sys.exit(1)
 
 def sanitize_mcp(servers):
     to_remove = []
@@ -208,9 +230,13 @@ if 'projects' in d:
             sanitize_mcp(remapped[new_key]['mcpServers'])
     d['projects'] = remapped
 
-with open(sys.argv[2], 'w') as f:
-    json.dump(d, f, indent=2)
-" "$HOME/.claude.json" "$AGENT_TMPDIR/.claude.json" "$PATH_MAP"
+try:
+    with open(sys.argv[2], 'w') as f:
+        json.dump(d, f, indent=2)
+except IOError as e:
+    print(f'[sanitize] ERROR: Failed to write {sys.argv[2]}: {e}', file=sys.stderr)
+    sys.exit(1)
+" "$HOME/.claude.json" "$AGENT_TMPDIR/.claude.json" "$PATH_MAP" || die "Failed to sanitize .claude.json"
     info "Sanitized .claude.json (remapped paths, rewrote localhost, removed hardware-dependent MCP servers)"
   fi
 elif [[ "$AGENT" == "codex" ]]; then

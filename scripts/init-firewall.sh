@@ -44,7 +44,14 @@ if [[ -n "$DOCKER_DNS_RULES" ]]; then
   done
 fi
 
-# 3. Base rules: DNS and localhost
+# 3. Block all IPv6 traffic (our allowlist is IPv4-only; IPv6 would bypass it)
+ip6tables -P INPUT DROP 2>/dev/null || true
+ip6tables -P FORWARD DROP 2>/dev/null || true
+ip6tables -P OUTPUT DROP 2>/dev/null || true
+ip6tables -A INPUT -i lo -j ACCEPT 2>/dev/null || true
+ip6tables -A OUTPUT -o lo -j ACCEPT 2>/dev/null || true
+
+# 4. Base rules: DNS and localhost (IPv4)
 iptables -A OUTPUT -p udp --dport 53 -j ACCEPT
 iptables -A INPUT -p udp --sport 53 -j ACCEPT
 iptables -A INPUT -i lo -j ACCEPT
