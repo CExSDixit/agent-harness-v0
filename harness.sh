@@ -135,10 +135,45 @@ info "Agent config dir: $AGENT_TMPDIR"
 # Seed credentials based on agent type
 if [[ "$AGENT" == "claude-code" ]]; then
   mkdir -p "$AGENT_TMPDIR/.claude"
-  # Copy credentials only (not sessions/memory)
-  [[ -f "$HOME/.claude.json" ]] && cp "$HOME/.claude.json" "$AGENT_TMPDIR/.claude.json"
+  # Copy config files (not sessions/memory)
   [[ -f "$HOME/.claude/credentials.json" ]] && cp "$HOME/.claude/credentials.json" "$AGENT_TMPDIR/.claude/credentials.json"
   [[ -f "$HOME/.claude/settings.json" ]] && cp "$HOME/.claude/settings.json" "$AGENT_TMPDIR/.claude/settings.json"
+  # Sanitize .claude.json for container use:
+  # - Rewrite localhost URLs to host.docker.internal (for host-side services like Plane)
+  # - Remove MCP servers that require host hardware (trnscrb)
+  if [[ -f "$HOME/.claude.json" ]]; then
+    python3 -c "
+import json, sys, re
+with open(sys.argv[1]) as f:
+    d = json.load(f)
+# Process all mcpServers sections (global and per-project)
+def sanitize_mcp(servers):
+    to_remove = []
+    for name, cfg in servers.items():
+        # Remove servers that need host hardware
+        if name in ('trnscrb',):
+            to_remove.append(name)
+            continue
+        # Rewrite localhost to host.docker.internal in env vars
+        if 'env' in cfg:
+            for k, v in cfg['env'].items():
+                if isinstance(v, str):
+                    cfg['env'][k] = re.sub(r'localhost|127\.0\.0\.1', 'host.docker.internal', v)
+    for name in to_remove:
+        del servers[name]
+# Global mcpServers
+if 'mcpServers' in d:
+    sanitize_mcp(d['mcpServers'])
+# Per-project mcpServers
+if 'projects' in d:
+    for proj, pcfg in d['projects'].items():
+        if 'mcpServers' in pcfg:
+            sanitize_mcp(pcfg['mcpServers'])
+with open(sys.argv[2], 'w') as f:
+    json.dump(d, f, indent=2)
+" "$HOME/.claude.json" "$AGENT_TMPDIR/.claude.json"
+    info "Sanitized .claude.json (rewrote localhost → host.docker.internal, removed hardware-dependent MCP servers)"
+  fi
 elif [[ "$AGENT" == "codex" ]]; then
   mkdir -p "$AGENT_TMPDIR/.codex"
   [[ -f "$HOME/.codex/auth.json" ]] && cp "$HOME/.codex/auth.json" "$AGENT_TMPDIR/.codex/auth.json"

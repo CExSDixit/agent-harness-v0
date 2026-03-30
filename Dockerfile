@@ -90,7 +90,9 @@ RUN \
   fnm default ${NODE_VERSION} && \
   # Claude Code + Codex CLI
   eval "$($FNM_DIR/fnm env)" && \
-  npm install -g @anthropic-ai/claude-code@latest @openai/codex@latest
+  npm install -g @anthropic-ai/claude-code@latest @openai/codex@latest && \
+  # Pre-install MCP servers that run inside the container
+  uv tool install plane-mcp-server
 
 # ── Shell config ─────────────────────────────────────────────────────────────
 COPY --chown=${USERNAME}:${USERNAME} scripts/zshenv /home/${USERNAME}/.zshenv
