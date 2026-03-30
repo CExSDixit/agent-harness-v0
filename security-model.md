@@ -95,7 +95,14 @@ Host-side MCP servers with write capabilities (e.g., Plane's `create_work_item`,
 The harness does **not** mount the Docker socket. If someone adds `-v /var/run/docker.sock:/var/run/docker.sock` to harness.sh, the agent gains full Docker API access and can spawn privileged containers, escaping all isolation.
 - **Mitigation:** Never mount the Docker socket. This is enforced by harness.sh not including it, but there is no technical prevention if someone edits the script.
 
-**5. Multi-tenant / shared host.**
+**5. Host-side MCP servers bound to 0.0.0.0.**
+MCP servers running on the host with SSE/HTTP transport (e.g., trnscrb) may bind to `0.0.0.0` to accept connections from Docker containers. This exposes the server port to all devices on the local network.
+- **What's exposed:** All MCP tools on that server. For trnscrb: transcript listing, transcript content, recording control.
+- **What protects it:** MCP SDK DNS rebinding protection (rejects requests with unrecognized Host headers). MCP SSE handshake requirement (not a simple HTTP GET).
+- **What doesn't protect it:** No authentication on SSE transport. No TLS. A purpose-built MCP client on the local network can connect.
+- **Mitigation:** Bind to `127.0.0.1` (default) when harness containers aren't needed. Only use `0.0.0.0` during active harness sessions. Alternatively, bind to the Docker bridge subnet only (`172.17.0.0/24`) for tighter scoping.
+
+**6. Multi-tenant / shared host.**
 If multiple users share the same host, one user's container can reach another user's services via the host network. Not relevant for single-user use; becomes a concern if the harness is deployed on shared infrastructure.
 - **Mitigation:** Use per-user Docker networks with isolated bridge subnets, or move to microVM isolation (Microsandbox, Firecracker).
 
