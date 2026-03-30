@@ -73,6 +73,5 @@ The agent process runs as the unprivileged `agent` user inside the container:
 
 ## Design context
 
-Full design spec: `~/git/cookbooks/projects/agent-harness-v0/design.md`
 Project code: `ah0`
-Daily notes tag: `[ah0]`
+Security model: `security-model.md`

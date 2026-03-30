@@ -16,5 +16,8 @@ Thumbs.db
 tmp/
 *.tmp
 
+# User config (contains local paths)
+.env
+
 # Agent config artifacts (created at runtime by harness.sh)
 harness-agent-*/

@@ -10,13 +10,13 @@ set -euo pipefail
 #   ./harness.sh review  --project <path> --repos <repo:mode> ... --agent <agent> --branches <b1,b2,...>
 #
 # Examples:
-#   ./harness.sh plan --project caseiq/projects/ai-cockpit --repos ~/git/lextegrity/ai-cockpit:ro --agent claude-code
-#   ./harness.sh dev --project caseiq/projects/ai-cockpit --repos ~/git/lextegrity/ai-cockpit:rw --agent claude-code --spec /path/to/Q-50-spec.md
-#   ./harness.sh review --project caseiq/projects/ai-cockpit --repos ~/git/lextegrity/ai-cockpit:ro --agent claude-code --branches feat/q50-thing
+#   ./harness.sh plan --project my-org/my-project --repos ~/git/my-app:ro --agent claude-code
+#   ./harness.sh dev --project my-org/my-project --repos ~/git/my-app:rw --agent claude-code --spec /context/my-org/my-project/PROJ-1-feature.md
+#   ./harness.sh review --project my-org/my-project --repos ~/git/my-app:ro --agent claude-code --branches feat/proj-1-feature
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 IMAGE_NAME="agent-harness:latest"
-COOKBOOKS_PATH="${COOKBOOKS_PATH:-$HOME/git/cookbooks}"
+COOKBOOKS_PATH="${COOKBOOKS_PATH:-}"
 
 # Defaults
 PHASE=""
@@ -48,7 +48,7 @@ PHASES:
   review    Adversarial review of branches (repos: read-only, cookbooks: read-write)
 
 OPTIONS:
-  --project <path>         Cookbooks project path (e.g., caseiq/projects/ai-cockpit)
+  --project <path>         Context repo project path (e.g., my-org/my-project)
   --repos <path:mode>      Repository to mount. Mode is rw or ro. Repeatable.
   --agent <name>           Agent to use: claude-code (default) or codex
   --network-profile <name> Network profile: default, plan, python-dev, node-dev, review-only
@@ -59,7 +59,7 @@ OPTIONS:
   --name <name>            Container name (default: harness-<phase>-<timestamp>)
 
 ENVIRONMENT:
-  COOKBOOKS_PATH           Path to cookbooks repo (default: ~/git/cookbooks)
+  COOKBOOKS_PATH           Path to your context/notes repo (required, mounted at /cookbooks)
   HARNESS_SSH_KEY          Default SSH key path
   ANTHROPIC_API_KEY        Claude Code API key
   OPENAI_API_KEY           Codex API key
@@ -100,6 +100,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Validation
+[[ -z "$COOKBOOKS_PATH" ]] && die "COOKBOOKS_PATH environment variable is required. Set it to your context/notes repo path."
+[[ ! -d "$COOKBOOKS_PATH" ]] && die "COOKBOOKS_PATH directory not found: $COOKBOOKS_PATH"
 [[ -z "$PROJECT" ]] && die "--project is required"
 [[ ${#REPOS[@]} -eq 0 ]] && die "At least one --repos is required"
 [[ "$PHASE" == "dev" && -z "$SPEC" ]] && die "--spec is required for dev phase"
