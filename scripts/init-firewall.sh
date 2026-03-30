@@ -54,8 +54,6 @@ iptables -A OUTPUT -o lo -j ACCEPT
 #    - VS Code devcontainer server-client communication
 #    - MCP servers running on the host (trnscrb, Plane, etc. via host.docker.internal)
 #    - DNS forwarding fallback (Docker embedded DNS → host resolver)
-#
-# See SECURITY NOTE below for when this becomes an attack vector.
 HOST_IP=$(ip route 2>/dev/null | grep default | cut -d" " -f3 || true)
 if [[ -n "$HOST_IP" ]]; then
   HOST_NETWORK=$(echo "$HOST_IP" | sed "s/\.[0-9]*$/.0\/24/")
