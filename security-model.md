@@ -130,6 +130,14 @@ If multiple users share the same host, one user's container can reach another us
 | Other agent sessions | Each agent gets its own temp config dir; sessions are not shared |
 | Host Claude/Codex config | Per-agent copy is made; host originals are not mounted |
 
+### MCP server attack surface by type
+
+| MCP Type | Attack Surface | Mitigation |
+|---|---|---|
+| **In-container STDIO** (e.g., Plane) | Agent has full access to all tools the server exposes. If the server has write capabilities (create/delete tickets), a prompt-injected agent can use them. | Scope tool permissions in `.claude/settings.local.json`. Only grant the tools each phase needs. |
+| **Host-side HTTP/SSE** (e.g., trnscrb) | Server port is exposed on host network. If bound to `0.0.0.0`, reachable from local network. No auth on MCP SSE transport. Agent can invoke all tools. | Bind to `127.0.0.1` when containers aren't needed. DNS rebinding protection limits Host headers. See section 5 above. |
+| **Remote HTTP** (e.g., ai-cockpit-stage) | Agent can call the remote API with mounted OAuth tokens. Token scope determines blast radius. | Use narrowly-scoped OAuth tokens. Remote server's own auth/RBAC is the primary control. |
+
 ### Per-agent isolation
 
 Each agent container gets its own temp directory seeded from host credentials:

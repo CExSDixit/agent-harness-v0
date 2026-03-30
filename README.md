@@ -276,6 +276,77 @@ The container name is printed when `harness.sh` launches. Or:
 docker ps --filter "name=harness-" --format "{{.Names}}"
 ```
 
+## MCP Servers in Containers
+
+The harness supports three strategies for making MCP servers available inside containers. `harness.sh` automatically sanitizes MCP configs when seeding the per-agent config directory.
+
+### Strategy 1: In-Container STDIO
+
+The MCP server binary is installed in the Docker image. Claude Code spawns it as a child process inside the container. No network access needed.
+
+| Aspect | Detail |
+|---|---|
+| **Where it runs** | Inside the container |
+| **Config type** | `"type": "stdio"` with `"command"` and `"args"` |
+| **Image change** | Yes — install the package in the Dockerfile |
+| **Network change** | None |
+| **Example** | Plane (`uvx plane-mcp-server stdio`) |
+
+**How to add a new STDIO MCP server:**
+1. Add the package install to the Dockerfile (e.g., `uv tool install <package>`)
+2. Rebuild the image
+3. Add the server config to your `~/.claude.json` (global or project-level)
+4. `harness.sh` copies the config into the container automatically
+
+### Strategy 2: Host-Side HTTP/SSE
+
+The MCP server runs on your host machine with HTTP/SSE transport. The container connects to it over the Docker bridge network via `host.docker.internal`.
+
+| Aspect | Detail |
+|---|---|
+| **Where it runs** | On the host, as a separate process |
+| **Config type** | `"type": "sse"` with `"url": "http://host.docker.internal:<port>/sse"` |
+| **Image change** | None |
+| **Network change** | None (host network is allowed by default) |
+| **Example** | trnscrb (SSE on port 8001) |
+
+**How `harness.sh` handles this:** If a STDIO MCP server in your config requires host hardware (e.g., audio capture), the sanitizer rewrites it to an SSE config pointing to `host.docker.internal`. Currently this is hardcoded for `trnscrb` — add new entries to the sanitizer in `harness.sh` as needed.
+
+**Host-side prerequisites:**
+1. The MCP server must support HTTP/SSE transport (not just STDIO)
+2. It must be running on the host before launching the container
+3. It must bind to `0.0.0.0` (or the Docker bridge IP) to accept container connections
+4. DNS rebinding protection must allow `host.docker.internal` in the Host header
+
+### Strategy 3: Remote HTTP
+
+The MCP server is hosted remotely (cloud, staging environment). The container connects over the internet.
+
+| Aspect | Detail |
+|---|---|
+| **Where it runs** | Remote server |
+| **Config type** | `"type": "http"` with `"url"` pointing to the remote endpoint |
+| **Image change** | None |
+| **Network change** | Add the server's domain to the network profile |
+| **Example** | ai-cockpit-stage (`https://ai-cockpit-mcp-stage.caseiq.app/mcp/`) |
+
+**How to add a remote MCP server:**
+1. Add the server config to your `~/.claude.json`
+2. Add the server's domain to the relevant network profile(s) in `profiles/`
+3. Rebuild the image (profiles are baked in), or hot-add at runtime: `docker exec -u root <container> allow-domain <domain>`
+4. If the server requires OAuth, authenticate on the host first — tokens are mounted into the container
+
+### Config Sanitization
+
+`harness.sh` automatically transforms MCP configs when copying them into the container:
+
+| Transformation | What it does |
+|---|---|
+| **Path remapping** | Project keys in `.claude.json` are remapped from host paths to container paths (e.g., `~/git/cookbooks` → `/cookbooks`) so Claude Code finds them in the correct working directory |
+| **Localhost rewrite** | `localhost` and `127.0.0.1` in env vars and URLs are rewritten to `host.docker.internal` |
+| **STDIO → SSE rewrite** | Hardware-dependent STDIO servers (trnscrb) are rewritten to SSE configs pointing to the host |
+| **GitHub IP ranges** | When `github.com` is in the network profile, all GitHub CIDR ranges are fetched from the meta API and added to the allowlist (prevents IP rotation failures) |
+
 ## Credential Setup (One-Time)
 
 ### GitHub App (for git push/pull and `gh` CLI)
