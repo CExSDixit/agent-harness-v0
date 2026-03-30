@@ -8,6 +8,7 @@ IFS=$'\n\t'
 #
 # Usage: init-firewall.sh [profile-name]
 # Profiles are loaded from /etc/harness/profiles/<name>.conf
+# Special profile: "permissive" — allows all outbound except host network
 
 PROFILE="${1:-default}"
 PROFILE_FILE="/etc/harness/profiles/${PROFILE}.conf"
@@ -43,39 +44,18 @@ if [[ -n "$DOCKER_DNS_RULES" ]]; then
   done
 fi
 
-# 3. Allow DNS and localhost before restrictions
+# 3. Base rules: DNS and localhost
 iptables -A OUTPUT -p udp --dport 53 -j ACCEPT
 iptables -A INPUT -p udp --sport 53 -j ACCEPT
-iptables -A OUTPUT -p tcp --dport 22 -j ACCEPT
-iptables -A INPUT -p tcp --sport 22 -m state --state ESTABLISHED -j ACCEPT
 iptables -A INPUT -i lo -j ACCEPT
 iptables -A OUTPUT -o lo -j ACCEPT
 
-# 4. Create ipset for allowed domains
-ipset create allowed-domains hash:net
-
-# 5. Load domains from profile
-echo "[firewall] Resolving domains from profile..."
-while IFS= read -r line; do
-  # Skip comments and empty lines
-  [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
-  domain=$(echo "$line" | xargs)  # trim whitespace
-
-  ips=$(dig +noall +answer A "$domain" 2>/dev/null | awk '$4 == "A" {print $5}')
-  if [[ -z "$ips" ]]; then
-    echo "[firewall] Warning: could not resolve $domain"
-    continue
-  fi
-
-  while read -r ip; do
-    if [[ "$ip" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
-      ipset add allowed-domains "$ip" 2>/dev/null || true
-      echo "[firewall] Added $ip ($domain)"
-    fi
-  done <<< "$ips"
-done < "$PROFILE_FILE"
-
-# 6. Allow host network (for Docker bridge communication)
+# 4. Allow host network (Docker bridge) — needed for:
+#    - VS Code devcontainer server-client communication
+#    - MCP servers running on the host (trnscrb, Plane, etc. via host.docker.internal)
+#    - DNS forwarding fallback (Docker embedded DNS → host resolver)
+#
+# See SECURITY NOTE below for when this becomes an attack vector.
 HOST_IP=$(ip route 2>/dev/null | grep default | cut -d" " -f3 || true)
 if [[ -n "$HOST_IP" ]]; then
   HOST_NETWORK=$(echo "$HOST_IP" | sed "s/\.[0-9]*$/.0\/24/")
@@ -84,20 +64,62 @@ if [[ -n "$HOST_IP" ]]; then
   iptables -A OUTPUT -d "$HOST_NETWORK" -j ACCEPT
 fi
 
-# 7. Set default policies
-iptables -P INPUT DROP
-iptables -P FORWARD DROP
-iptables -P OUTPUT DROP
+# 5. Branch based on profile type
+if [[ "$PROFILE" == "permissive" ]]; then
+  # --- Permissive mode: allow all outbound internet (host already blocked above) ---
+  echo "[firewall] WARNING: Permissive mode — all outbound internet traffic allowed"
 
-# Allow established connections
-iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
-iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+  iptables -P INPUT DROP
+  iptables -P FORWARD DROP
+  iptables -P OUTPUT ACCEPT
 
-# Allow only ipset members
-iptables -A OUTPUT -m set --match-set allowed-domains dst -j ACCEPT
+  # Allow established inbound (responses to outbound requests)
+  iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 
-# Reject everything else (immediate feedback, not silent drop)
-iptables -A OUTPUT -j REJECT --reject-with icmp-admin-prohibited
+  echo "[firewall] Profile 'permissive' active. All outbound allowed, host network blocked."
 
-echo "[firewall] Profile '$PROFILE' active. $(ipset list allowed-domains 2>/dev/null | grep -c "^[0-9]") IPs allowed."
-echo "[firewall] Use 'allow-domain <domain>' to add domains at runtime."
+else
+  # --- Allowlist mode: only ipset members allowed ---
+
+  # Create ipset for allowed domains
+  ipset create allowed-domains hash:net
+
+  # Load domains from profile
+  echo "[firewall] Resolving domains from profile..."
+  while IFS= read -r line; do
+    # Skip comments and empty lines
+    [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+    domain=$(echo "$line" | xargs)  # trim whitespace
+
+    ips=$(dig +noall +answer A "$domain" 2>/dev/null | awk '$4 == "A" {print $5}')
+    if [[ -z "$ips" ]]; then
+      echo "[firewall] Warning: could not resolve $domain"
+      continue
+    fi
+
+    while read -r ip; do
+      if [[ "$ip" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+        ipset add allowed-domains "$ip" 2>/dev/null || true
+        echo "[firewall] Added $ip ($domain)"
+      fi
+    done <<< "$ips"
+  done < "$PROFILE_FILE"
+
+  # Set default policies
+  iptables -P INPUT DROP
+  iptables -P FORWARD DROP
+  iptables -P OUTPUT DROP
+
+  # Allow established connections
+  iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+  iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+
+  # Allow only ipset members
+  iptables -A OUTPUT -m set --match-set allowed-domains dst -j ACCEPT
+
+  # Reject everything else (immediate feedback, not silent drop)
+  iptables -A OUTPUT -j REJECT --reject-with icmp-admin-prohibited
+
+  echo "[firewall] Profile '$PROFILE' active. $(ipset list allowed-domains 2>/dev/null | grep -c "^[0-9]") IPs allowed."
+  echo "[firewall] Use 'allow-domain <domain>' to add domains at runtime."
+fi
