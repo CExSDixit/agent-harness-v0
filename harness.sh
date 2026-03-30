@@ -159,12 +159,14 @@ DOCKER_ARGS=(
   "-e" "HARNESS_NETWORK_PROFILE=$NETWORK_PROFILE"
   "-e" "HARNESS_PROJECT=$PROJECT"
   "-e" "HARNESS_AGENT=$AGENT"
+  ${CLAUDE_CODE_OAUTH_TOKEN:+"-e" "CLAUDE_CODE_OAUTH_TOKEN=$CLAUDE_CODE_OAUTH_TOKEN"}
+  ${OPENAI_API_KEY:+"-e" "OPENAI_API_KEY=$OPENAI_API_KEY"}
 )
 
 # Agent config mounts
 if [[ "$AGENT" == "claude-code" ]]; then
   DOCKER_ARGS+=("-v" "$AGENT_TMPDIR/.claude:/home/agent/.claude:rw")
-  [[ -f "$AGENT_TMPDIR/.claude.json" ]] && DOCKER_ARGS+=("-v" "$AGENT_TMPDIR/.claude.json:/home/agent/.claude.json:ro")
+  [[ -f "$AGENT_TMPDIR/.claude.json" ]] && DOCKER_ARGS+=("-v" "$AGENT_TMPDIR/.claude.json:/home/agent/.claude.json:rw")
 elif [[ "$AGENT" == "codex" ]]; then
   DOCKER_ARGS+=("-v" "$AGENT_TMPDIR/.codex:/home/agent/.codex:rw")
 fi
