@@ -169,16 +169,13 @@ echo "=== Tier 3: Smoke Test ==="
 
 if docker image inspect agent-harness:latest &>/dev/null; then
   TMP=$(mktemp -d)
-  trap 'rm -rf "$TMP"; docker stop htest-smoke >/dev/null 2>&1' EXIT
+  trap 'rm -rf "$TMP"; docker ps -q --filter "name=htest-" 2>/dev/null | xargs -r docker stop >/dev/null 2>&1' EXIT
 
-  # Claude credentials
-  mkdir -p "$TMP/.claude"
+  # Prepare credentials (shared across all Tier 3 containers)
+  mkdir -p "$TMP/.claude" "$TMP/.codex"
   [[ -f "$HOME/.claude/credentials.json" ]] && cp "$HOME/.claude/credentials.json" "$TMP/.claude/"
   [[ -f "$HOME/.claude/settings.json" ]] && cp "$HOME/.claude/settings.json" "$TMP/.claude/"
   [[ -f "$HOME/.claude.json" ]] && cp "$HOME/.claude.json" "$TMP/.claude.json"
-
-  # Codex credentials
-  mkdir -p "$TMP/.codex"
   [[ -f "$HOME/.codex/auth.json" ]] && cp "$HOME/.codex/auth.json" "$TMP/.codex/"
   [[ -f "$HOME/.codex/cloud-requirements-cache.json" ]] && cp "$HOME/.codex/cloud-requirements-cache.json" "$TMP/.codex/"
   if [[ -f "$HOME/.codex/config.toml" ]]; then
@@ -194,29 +191,49 @@ if docker image inspect agent-harness:latest &>/dev/null; then
   )
   [[ -f "$TMP/.claude.json" ]] && SMOKE_VOLS+=(-v "$TMP/.claude.json:/home/agent/.claude.json:rw")
 
-  docker run --rm -d --name htest-smoke \
-    --cap-add=NET_ADMIN --cap-add=NET_RAW \
-    ${CLAUDE_CODE_OAUTH_TOKEN:+-e "CLAUDE_CODE_OAUTH_TOKEN=$CLAUDE_CODE_OAUTH_TOKEN"} \
-    ${OPENAI_API_KEY:+-e "OPENAI_API_KEY=$OPENAI_API_KEY"} \
-    "${SMOKE_VOLS[@]}" \
-    agent-harness:latest sleep infinity >/dev/null 2>&1
+  # Helper: start a fresh container with a specific firewall profile
+  smoke_container() {
+    local name="$1" profile="$2"
+    docker run --rm -d --name "$name" \
+      --cap-add=NET_ADMIN --cap-add=NET_RAW \
+      ${CLAUDE_CODE_OAUTH_TOKEN:+-e "CLAUDE_CODE_OAUTH_TOKEN=$CLAUDE_CODE_OAUTH_TOKEN"} \
+      ${OPENAI_API_KEY:+-e "OPENAI_API_KEY=$OPENAI_API_KEY"} \
+      "${SMOKE_VOLS[@]}" \
+      agent-harness:latest sleep infinity >/dev/null 2>&1
+    docker exec -u root "$name" /usr/local/bin/init-firewall.sh "$profile" >/dev/null 2>&1
+  }
 
-  docker exec -u root htest-smoke /usr/local/bin/init-firewall.sh default >/dev/null 2>&1
-
-  # Bubblewrap
+  # --- Image basics ---
   docker run --rm agent-harness:latest which bwrap >/dev/null 2>&1 \
     && pass "bubblewrap installed" || fail "bubblewrap missing"
 
-  # Both agents on PATH
+  # --- Firewall init per mode profile (fresh container each time) ---
+  smoke_container htest-plan-fw plan \
+    && pass "firewall init: plan profile" || fail "firewall: plan profile"
+  docker stop htest-plan-fw >/dev/null 2>&1
+
+  smoke_container htest-dev-fw python-dev \
+    && pass "firewall init: python-dev profile" || fail "firewall: python-dev profile"
+  docker stop htest-dev-fw >/dev/null 2>&1
+
+  smoke_container htest-review-fw review-only \
+    && pass "firewall init: review-only profile" || fail "firewall: review-only profile"
+  docker stop htest-review-fw >/dev/null 2>&1
+
+  # --- Full smoke test (agents + codex exec) using python-dev profile ---
+  smoke_container htest-smoke python-dev \
+    || { fail "smoke container failed to start"; }
+
   docker exec -u agent htest-smoke /usr/local/bin/entrypoint.sh bash -c 'which codex && which claude' >/dev/null 2>&1 \
     && pass "both agents on PATH" || fail "agents not on PATH"
 
-  # Codex exec hello world
   OUT=$(docker exec -u agent -w "/repos/$TEST_REPO_NAME" htest-smoke \
     /usr/local/bin/entrypoint.sh codex exec --dangerously-bypass-approvals-and-sandbox "echo harness-smoke-ok" 2>&1)
   [[ "$OUT" == *"harness-smoke-ok"* ]] && pass "codex exec end-to-end" || fail "codex exec: ${OUT:0:200}"
 
-  # Network profiles
+  docker stop htest-smoke >/dev/null 2>&1
+
+  # --- Profile content checks ---
   ALL_OK=true
   for profile in "$SCRIPT_DIR"/profiles/*.conf; do
     name=$(basename "$profile" .conf)
@@ -224,8 +241,6 @@ if docker image inspect agent-harness:latest &>/dev/null; then
     grep -q "chatgpt.com" "$profile" || { fail "chatgpt.com missing from $name"; ALL_OK=false; }
   done
   $ALL_OK && pass "chatgpt.com in all profiles"
-
-  docker stop htest-smoke >/dev/null 2>&1
 else
   fail "image not built — skipping Tier 3"
 fi
