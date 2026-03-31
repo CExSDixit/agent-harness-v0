@@ -80,7 +80,8 @@ launch_agent() {
   exec $cmd "$prompt"
 }
 
-# --- Auto-launch based on phase ---
+# --- Auto-launch based on phase (only with TTY — detached containers skip to exec "$@") ---
+if [[ -t 0 || "$PRINT_PROMPT" == "true" ]]; then
 case "${HARNESS_ROLE:-}" in
   plan)
     # Plan mode: always launch agent with repo context
@@ -170,6 +171,7 @@ If a branch cannot be fully verified safely, say so explicitly."
     fi
     ;;
 esac
+fi
 
-# Fallback: drop into shell (no spec/branches, or agent launch returned 1)
+# Fallback: drop into shell or run provided command (e.g., sleep infinity in detached mode)
 exec "$@"
