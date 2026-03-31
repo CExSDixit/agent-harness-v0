@@ -667,15 +667,37 @@ A helper script bridges the gap by saving the clipboard image to a shared mount 
 
 The image is saved to `$COOKBOOKS_PATH/.harness-images/` which is bind-mounted at `/cookbooks/.harness-images/` in every container. The path is identical across all three modes.
 
-**Setting up a keyboard shortcut (macOS Automator):**
+**Quick reference — the three-keypress flow:**
 
-1. Open **Automator** → New → **Quick Action**
+```
+Cmd+Shift+4      →  screenshot a region (image goes to macOS clipboard)
+Ctrl+Shift+V     →  saves image to shared mount, copies container path to clipboard
+@ then Cmd+V     →  pastes the container path in Claude/Codex terminal
+```
+
+**Setting up the keyboard shortcut (macOS Automator):**
+
+1. Open **Automator** (Spotlight → "Automator") → **New Document** → **Quick Action**
 2. Set "Workflow receives" to **no input** in **any application**
 3. Add action: **Run Shell Script**
-4. Shell: `/bin/bash`
-5. Script: full path to `harness-paste.sh` (e.g., `/Users/you/git/agent-harness-v0/scripts/harness-paste.sh`)
-6. Save as "Harness Paste"
-7. **System Settings → Keyboard → Keyboard Shortcuts → Services** → find "Harness Paste" → assign a shortcut (e.g., **Ctrl+Shift+V**)
+4. Shell: change dropdown to **/bin/bash** (default is /bin/sh which won't work)
+5. Pass input: **to stdin**
+6. Script content (two lines — the PATH export is required because Automator doesn't load your shell profile):
+   ```bash
+   export PATH="/opt/homebrew/bin:$PATH"
+   /Users/you/git/agent-harness-v0/scripts/harness-paste.sh
+   ```
+   Replace `/Users/you/` with your actual home directory.
+7. **Cmd+S** → save as **"Harness Paste"**
+8. Open **System Settings → Keyboard → Keyboard Shortcuts → Services**
+9. Scroll to **General** → find **Harness Paste** → click "none" → press **Ctrl+Shift+V**
+
+**Testing the shortcut:**
+
+1. **Cmd+Shift+4** → select any screen region
+2. **Ctrl+Shift+V** → macOS notification: "Path copied to clipboard"
+3. Open container terminal → type `@` → **Cmd+V** → path appears (e.g., `/cookbooks/.harness-images/paste-20260330-200512.png`)
+4. Press Enter — Claude/Codex reads the image
 
 **Cleanup:** `.harness-images/` accumulates files over time. Periodically run:
 ```bash
