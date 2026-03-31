@@ -52,7 +52,7 @@ PHASES:
   review    Adversarial review of branches (repos: read-only, cookbooks: read-write)
 
 OPTIONS:
-  --project <path>         Context repo project path (e.g., my-org/my-project)
+  --project <name|path>    Project name or path (e.g., ai-cockpit or caseiq/projects/ai-cockpit)
   --repos <path:mode>      Repository to mount. Mode is rw or ro. Repeatable.
   --agent <name>           Agent: claude-code (or claude), codex. See defaults below.
   --network-profile <name> Network profile: default, plan, python-dev, node-dev, review-only
@@ -122,6 +122,22 @@ done
 [[ ${#REPOS[@]} -eq 0 ]] && die "At least one --repos is required"
 [[ "$PHASE" == "review" && -z "$BRANCHES" ]] && die "--branches is required for review phase"
 
+# Resolve project name to full path within cookbooks
+if [[ "$PROJECT" != */* ]]; then
+  # Short name — find matching project directories
+  MATCHES=$(find "$COOKBOOKS_PATH" -type d -path "*/projects/$PROJECT" 2>/dev/null)
+  MATCH_COUNT=$(echo "$MATCHES" | grep -c . 2>/dev/null || true)
+  if [[ "$MATCH_COUNT" -eq 0 ]]; then
+    die "Project '$PROJECT' not found in $COOKBOOKS_PATH"
+  elif [[ "$MATCH_COUNT" -gt 1 ]]; then
+    echo -e "${RED}ERROR:${NC} Multiple projects match '$PROJECT':" >&2
+    echo "$MATCHES" | while read -r m; do echo "  ${m#$COOKBOOKS_PATH/}" >&2; done
+    die "Specify the full path (e.g., --project $(echo "$MATCHES" | head -1 | sed "s|$COOKBOOKS_PATH/||"))"
+  fi
+  PROJECT="${MATCHES#$COOKBOOKS_PATH/}"
+  info "Resolved project: $PROJECT"
+fi
+
 # Normalize agent name (accept shorthand)
 case "$AGENT" in
   claude) AGENT="claude-code" ;;
@@ -142,10 +158,13 @@ fi
 # Resolve dev spec to full container path
 if [[ "$PHASE" == "dev" && -n "$SPEC" ]]; then
   if [[ "$SPEC" != /* ]]; then
-    # Relative path or filename — resolve from cookbooks
-    RESOLVED=$(find "$COOKBOOKS_PATH" -path "*/$SPEC" -type f 2>/dev/null | head -1)
+    # Search within the resolved project directory first, then all of cookbooks
+    PROJECT_DIR="$COOKBOOKS_PATH/$PROJECT"
+    RESOLVED=$(find "$PROJECT_DIR" -path "*/$SPEC" -type f 2>/dev/null | head -1)
+    [[ -z "$RESOLVED" ]] && RESOLVED=$(find "$PROJECT_DIR" -name "$(basename "$SPEC")" -type f 2>/dev/null | head -1)
+    [[ -z "$RESOLVED" ]] && RESOLVED=$(find "$COOKBOOKS_PATH" -path "*/$SPEC" -type f 2>/dev/null | head -1)
     [[ -z "$RESOLVED" ]] && RESOLVED=$(find "$COOKBOOKS_PATH" -name "$(basename "$SPEC")" -type f 2>/dev/null | head -1)
-    [[ -z "$RESOLVED" ]] && die "Spec file not found in cookbooks: $SPEC"
+    [[ -z "$RESOLVED" ]] && die "Spec file not found: $SPEC (searched $PROJECT_DIR and $COOKBOOKS_PATH)"
     SPEC="/cookbooks/${RESOLVED#$COOKBOOKS_PATH/}"
     info "Resolved spec: $SPEC"
   fi
