@@ -108,7 +108,15 @@ I will give you instructions next."
 Available repositories:
 ${REPO_LIST}
 
-IMPORTANT: Before making any code changes, create a new git branch from the current HEAD of the repository you are working in. Do not commit directly to the checked-out branch. Use \`git checkout -b <branch-name>\` or \`git worktree add\` if you need to work across multiple branches simultaneously."
+IMPORTANT — WORKTREE REQUIREMENT: The repository checkout at /repos/ is shared and may be used by other agents simultaneously. You MUST use \`git worktree add\` to create an isolated working directory before making any changes. Do NOT use \`git checkout -b\` — that would switch the shared checkout's branch and break other agents.
+
+Steps:
+1. \`git worktree add /repos/<repo-name>-worktree <new-branch-name>\` (create from current HEAD)
+2. \`cd /repos/<repo-name>-worktree\`
+3. Do all your work in the worktree directory
+4. Commit and push from the worktree
+
+If the branch already exists, use: \`git worktree add /repos/<repo-name>-worktree <existing-branch>\`"
       launch_agent "$PROMPT"
     fi
     ;;

@@ -104,6 +104,13 @@ else
   # Create ipset for allowed domains
   ipset create allowed-domains hash:net
 
+  # Wait for DNS readiness (Docker embedded DNS may not be immediately available)
+  for i in 1 2 3; do
+    dig +short +timeout=2 api.anthropic.com >/dev/null 2>&1 && break
+    echo "[firewall] Waiting for DNS... (attempt $i)"
+    sleep 1
+  done
+
   # Load domains from profile
   echo "[firewall] Resolving domains from profile..."
   while IFS= read -r line; do
