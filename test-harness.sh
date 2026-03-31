@@ -32,7 +32,12 @@ TEST_REPO_NAME=$(basename "${TEST_REPO:-none}")
 echo "=== Prerequisites ==="
 [[ -z "${COOKBOOKS_PATH:-}" ]] && { echo "COOKBOOKS_PATH not set"; exit 1; }
 [[ -z "$TEST_REPO" ]] && { echo "No test repo found"; exit 1; }
+[[ -z "${TEST_PROJECT:-}" ]] && { echo "TEST_PROJECT not set in .env (e.g., TEST_PROJECT=ai-cockpit)"; exit 1; }
+[[ -z "${TEST_SPEC:-}" ]] && { echo "TEST_SPEC not set in .env (e.g., TEST_SPEC=Q-47-mcp-validation-handoff.md)"; exit 1; }
+[[ -z "${TEST_SPEC_RELATIVE:-}" ]] && { echo "TEST_SPEC_RELATIVE not set in .env (e.g., TEST_SPEC_RELATIVE=mcp-search-fetch/Q-46-changelog.md)"; exit 1; }
 echo "Repo: $TEST_REPO_NAME"
+echo "Project: $TEST_PROJECT"
+echo "Spec: $TEST_SPEC (relative: $TEST_SPEC_RELATIVE)"
 
 # ============================================================
 echo ""
@@ -40,54 +45,63 @@ echo "=== Tier 1: Arg Parsing (harness.sh --dry-run) ==="
 # ============================================================
 
 # Plan mode defaults
-OUT=$("$SCRIPT_DIR/harness.sh" plan --project ai-cockpit --repos "$TEST_REPO:ro" --dry-run 2>&1)
+OUT=$("$SCRIPT_DIR/harness.sh" plan --project "$TEST_PROJECT" --repos "$TEST_REPO:ro" --dry-run 2>&1)
 [[ "$OUT" == *"AGENT=claude-code"* ]] && pass "plan defaults to claude-code" || fail "plan agent: $OUT"
 [[ "$OUT" == *"NETWORK=plan"* ]] && pass "plan defaults to plan network" || fail "plan network: $OUT"
 
 # Plan with codex override
-OUT=$("$SCRIPT_DIR/harness.sh" plan --project ai-cockpit --repos "$TEST_REPO:ro" --agent codex --dry-run 2>&1)
+OUT=$("$SCRIPT_DIR/harness.sh" plan --project "$TEST_PROJECT" --repos "$TEST_REPO:ro" --agent codex --dry-run 2>&1)
 [[ "$OUT" == *"AGENT=codex"* ]] && pass "plan --agent codex override" || fail "plan codex: $OUT"
 
 # Dev with spec defaults to claude-code
-OUT=$("$SCRIPT_DIR/harness.sh" dev --project ai-cockpit --repos "$TEST_REPO:rw" --spec Q-47-mcp-validation-handoff.md --dry-run 2>&1)
+OUT=$("$SCRIPT_DIR/harness.sh" dev --project "$TEST_PROJECT" --repos "$TEST_REPO:rw" --spec "$TEST_SPEC" --dry-run 2>&1)
 [[ "$OUT" == *"AGENT=claude-code"* ]] && pass "dev+spec defaults to claude-code" || fail "dev+spec agent: $OUT"
 [[ "$OUT" == *"NETWORK=python-dev"* ]] && pass "dev defaults to python-dev network" || fail "dev network: $OUT"
 
 # Dev without spec — no agent
-OUT=$("$SCRIPT_DIR/harness.sh" dev --project ai-cockpit --repos "$TEST_REPO:rw" --dry-run 2>&1 | grep "^AGENT=")
+OUT=$("$SCRIPT_DIR/harness.sh" dev --project "$TEST_PROJECT" --repos "$TEST_REPO:rw" --dry-run 2>&1 | grep "^AGENT=")
 [[ "$OUT" == "AGENT=" ]] && pass "dev no-spec has no default agent" || fail "dev no-spec: $OUT"
 
 # Agent alias (use a real spec filename)
-OUT=$("$SCRIPT_DIR/harness.sh" dev --project ai-cockpit --repos "$TEST_REPO:rw" --agent claude --spec Q-47-mcp-validation-handoff.md --dry-run 2>&1)
+OUT=$("$SCRIPT_DIR/harness.sh" dev --project "$TEST_PROJECT" --repos "$TEST_REPO:rw" --agent claude --spec "$TEST_SPEC" --dry-run 2>&1)
 [[ "$OUT" == *"AGENT=claude-code"* ]] && pass "--agent claude → claude-code" || fail "alias: $OUT"
 
 # Review defaults
-OUT=$("$SCRIPT_DIR/harness.sh" review --project ai-cockpit --repos "$TEST_REPO:ro" --branches feat/test --dry-run 2>&1)
+OUT=$("$SCRIPT_DIR/harness.sh" review --project "$TEST_PROJECT" --repos "$TEST_REPO:ro" --branches feat/test --dry-run 2>&1)
 [[ "$OUT" == *"AGENT=codex"* ]] && pass "review defaults to codex" || fail "review agent: $OUT"
 [[ "$OUT" == *"REVIEW_SPEC=stage"* ]] && pass "review defaults to stage base" || fail "review base: $OUT"
 [[ "$OUT" == *"NETWORK=review-only"* ]] && pass "review defaults to review-only" || fail "review network: $OUT"
 
 # Review with --base main
-OUT=$("$SCRIPT_DIR/harness.sh" review --project ai-cockpit --repos "$TEST_REPO:ro" --branches feat/test --base main --dry-run 2>&1)
+OUT=$("$SCRIPT_DIR/harness.sh" review --project "$TEST_PROJECT" --repos "$TEST_REPO:ro" --branches feat/test --base main --dry-run 2>&1)
 [[ "$OUT" == *"REVIEW_SPEC=main"* ]] && pass "review --base main" || fail "review main: $OUT"
 
 # Project resolution — short name
-OUT=$("$SCRIPT_DIR/harness.sh" dev --project ai-cockpit --repos "$TEST_REPO:rw" --dry-run 2>&1)
-[[ "$OUT" == *"PROJECT=caseiq/projects/ai-cockpit"* ]] && pass "project short name resolves" || fail "project resolve: $OUT"
+OUT=$("$SCRIPT_DIR/harness.sh" dev --project "$TEST_PROJECT" --repos "$TEST_REPO:rw" --dry-run 2>&1)
+[[ "$OUT" == *"PROJECT="*"$TEST_PROJECT"* ]] && pass "project short name resolves" || fail "project resolve: $OUT"
 
 # Project resolution — full path passthrough
-OUT=$("$SCRIPT_DIR/harness.sh" dev --project caseiq/projects/ai-cockpit --repos "$TEST_REPO:rw" --dry-run 2>&1)
-[[ "$OUT" == *"PROJECT=caseiq/projects/ai-cockpit"* ]] && pass "project full path unchanged" || fail "project passthrough: $OUT"
+FULL_PROJECT=$(echo "$OUT" | grep "^PROJECT=" | sed 's/PROJECT=//')
+OUT=$("$SCRIPT_DIR/harness.sh" dev --project "$FULL_PROJECT" --repos "$TEST_REPO:rw" --dry-run 2>&1)
+[[ "$OUT" == *"PROJECT=$FULL_PROJECT"* ]] && pass "project full path unchanged" || fail "project passthrough: $OUT"
+
+# Project resolution — non-existent project fails
+OUT=$("$SCRIPT_DIR/harness.sh" dev --project nonexistent-project-xyz --repos "$TEST_REPO:rw" --dry-run 2>&1)
+[[ "$OUT" == *"not found"* ]] && pass "non-existent project rejected" || fail "should reject bad project: $OUT"
 
 # Spec resolution — relative path (scoped to resolved project)
-OUT=$("$SCRIPT_DIR/harness.sh" dev --project ai-cockpit --repos "$TEST_REPO:rw" --spec mcp-search-fetch/Q-46-changelog.md --dry-run 2>&1)
-[[ "$OUT" == *"/cookbooks/caseiq/projects/ai-cockpit/mcp-search-fetch/Q-46-changelog.md"* ]] \
+OUT=$("$SCRIPT_DIR/harness.sh" dev --project "$TEST_PROJECT" --repos "$TEST_REPO:rw" --spec "$TEST_SPEC_RELATIVE" --dry-run 2>&1)
+[[ "$OUT" == *"/cookbooks/"*"$TEST_SPEC_RELATIVE"* ]] \
   && pass "relative spec path resolves" || fail "spec relative: $OUT"
 
 # Spec resolution — filename only
-OUT=$("$SCRIPT_DIR/harness.sh" dev --project ai-cockpit --repos "$TEST_REPO:rw" --spec Q-47-mcp-validation-handoff.md --dry-run 2>&1)
-[[ "$OUT" == *"/cookbooks/"*"Q-47-mcp-validation-handoff.md"* ]] \
+OUT=$("$SCRIPT_DIR/harness.sh" dev --project "$TEST_PROJECT" --repos "$TEST_REPO:rw" --spec "$TEST_SPEC" --dry-run 2>&1)
+[[ "$OUT" == *"/cookbooks/"*"$TEST_SPEC"* ]] \
   && pass "filename-only spec resolves" || fail "spec filename: $OUT"
+
+# Spec resolution — non-existent spec fails
+OUT=$("$SCRIPT_DIR/harness.sh" dev --project "$TEST_PROJECT" --repos "$TEST_REPO:rw" --spec nonexistent-spec-xyz.md --dry-run 2>&1)
+[[ "$OUT" == *"not found"* ]] && pass "non-existent spec rejected" || fail "should reject bad spec: $OUT"
 
 # Invalid agent
 OUT=$("$SCRIPT_DIR/harness.sh" dev --project caseiq/projects/ai-cockpit --repos "$TEST_REPO:rw" --agent bogus --dry-run 2>&1)
