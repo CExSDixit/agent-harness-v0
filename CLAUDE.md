@@ -61,13 +61,21 @@ docker exec -u root <container> list-allowed
 
 ## Testing
 
-Run `./test-harness.sh` after any changes. The test suite has three tiers:
+Run `./test-harness.sh` after any changes to harness.sh, entrypoint.sh, or Dockerfile.
 
-1. **Arg parsing** — calls `harness.sh --dry-run`, validates resolved config (no Docker)
-2. **Entrypoint prompts** — calls `entrypoint.sh --print-prompt`, validates generated prompts (one container)
-3. **Smoke test** — real `codex exec` end-to-end (one container with firewall)
+**Setup:** Tests require `.env` with these test-specific variables (see `.env.example`):
+```
+TEST_PROJECT=ai-cockpit              # A project name that exists in your cookbooks
+TEST_SPEC=Q-47-mcp-validation.md     # A spec filename that exists in that project
+TEST_SPEC_RELATIVE=subdir/spec.md    # A spec with a relative path within the project
+```
 
-Tests call real script functions via `--dry-run` and `--print-prompt` hooks. No logic is duplicated between tests and scripts (except credential file copies which are simple `cp` commands).
+**Three tiers:**
+1. **Arg parsing (Tier 1)** — calls `harness.sh --dry-run`, validates agent defaults, spec/project resolution, alias normalization, input validation. Includes negative tests for non-existent projects and specs. No Docker.
+2. **Entrypoint prompts (Tier 2)** — calls `entrypoint.sh --print-prompt` inside a container, validates generated prompts contain repo lists, spec paths, worktree instructions, review coordinator references. One container.
+3. **Smoke test (Tier 3)** — real `codex exec "echo hello"` end-to-end, validates both agents on PATH, bubblewrap installed, network profiles correct. One container with firewall.
+
+Tests call real script functions via `--dry-run` and `--print-prompt` hooks — no logic is duplicated.
 
 ## Security model
 

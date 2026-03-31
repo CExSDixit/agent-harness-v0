@@ -69,11 +69,16 @@ AGENT DEFAULTS:
 
   Both agents are always authenticated. Override with --agent.
 
-ENVIRONMENT:
+ENVIRONMENT (set in .env):
   COOKBOOKS_PATH                 Path to your context/notes repo (required)
   GITHUB_APP_ID                  GitHub App ID (for git push/pull and gh CLI)
   GITHUB_APP_INSTALLATION_ID     GitHub App Installation ID
   GITHUB_APP_PEM                 Path to GitHub App private key PEM file
+
+TESTING (set in .env for test-harness.sh):
+  TEST_PROJECT                   Project name for tests (e.g., ai-cockpit)
+  TEST_SPEC                      Spec filename for tests (must exist in TEST_PROJECT)
+  TEST_SPEC_RELATIVE             Spec with relative path (e.g., subdir/spec.md)
 EOF
   exit 1
 }
