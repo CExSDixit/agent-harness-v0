@@ -38,6 +38,10 @@ docker build -t agent-harness:latest .
 ./harness.sh dev --project <cookbooks-path> --repos <repo:rw> --agent claude-code --spec <path>
 ./harness.sh review --project <cookbooks-path> --repos <repo:ro> --agent claude-code --branches <b1,b2>
 
+# Inside the container — godmode aliases (bypass all permission prompts)
+claude-yolo                # claude --dangerously-skip-permissions
+codex-yolo                 # codex --dangerously-bypass-approvals-and-sandbox
+
 # Hot-reload network policies (operator only, from host terminal)
 docker exec -u root <container> allow-domain docs.python.org
 docker exec -u root <container> deny-domain docs.python.org

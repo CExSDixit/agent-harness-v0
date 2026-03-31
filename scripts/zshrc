@@ -11,6 +11,8 @@ setopt SHARE_HISTORY HIST_IGNORE_DUPS HIST_REDUCE_BLANKS
 alias fd=fdfind
 alias ll='ls -lah --color=auto'
 alias la='ls -A --color=auto'
+alias claude-yolo='claude --dangerously-skip-permissions'
+alias codex-yolo='codex --dangerously-bypass-approvals-and-sandbox'
 
 # Completion
 autoload -Uz compinit && compinit -u
