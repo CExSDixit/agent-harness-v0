@@ -33,10 +33,21 @@ agent-harness-v0/
 # Build the image
 docker build -t agent-harness:latest .
 
+# Run regression tests (ALWAYS run after changes to harness.sh, entrypoint.sh, or Dockerfile)
+./test-harness.sh
+
 # Launch phases via harness.sh
-./harness.sh plan --project <cookbooks-path> --repos <repo:mode> --agent claude-code
-./harness.sh dev --project <cookbooks-path> --repos <repo:rw> --agent claude-code --spec <path>
-./harness.sh review --project <cookbooks-path> --repos <repo:ro> --agent claude-code --branches <b1,b2>
+./harness.sh plan --project <project-path> --repos <repo:mode>
+./harness.sh dev --project <project-path> --repos <repo:rw> --spec <filename-or-path>
+./harness.sh dev --project <project-path> --repos <repo:rw>              # shell mode
+./harness.sh review --project <project-path> --repos <repo:ro> --branches <b1,b2>
+
+# Agent defaults: plan→claude, dev+spec→claude, review→codex
+# Override with --agent codex or --agent claude
+# Both agents are always authenticated in every container
+
+# Dry-run (print resolved config, no Docker)
+./harness.sh dev --project <path> --repos <repo:rw> --spec myspec.md --dry-run
 
 # Inside the container — godmode aliases (bypass all permission prompts)
 claude-yolo                # claude --dangerously-skip-permissions
@@ -47,6 +58,16 @@ docker exec -u root <container> allow-domain docs.python.org
 docker exec -u root <container> deny-domain docs.python.org
 docker exec -u root <container> list-allowed
 ```
+
+## Testing
+
+Run `./test-harness.sh` after any changes. The test suite has three tiers:
+
+1. **Arg parsing** — calls `harness.sh --dry-run`, validates resolved config (no Docker)
+2. **Entrypoint prompts** — calls `entrypoint.sh --print-prompt`, validates generated prompts (one container)
+3. **Smoke test** — real `codex exec` end-to-end (one container with firewall)
+
+Tests call real script functions via `--dry-run` and `--print-prompt` hooks. No logic is duplicated between tests and scripts (except credential file copies which are simple `cp` commands).
 
 ## Security model
 

@@ -26,6 +26,7 @@ RUN apt-get update && \
     build-essential \
     nano vim \
     iptables ipset iproute2 dnsutils \
+    bubblewrap \
     unzip less procps man-db \
   && \
   # GitHub CLI (needs curl, so must come after base install)

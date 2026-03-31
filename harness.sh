@@ -5,14 +5,14 @@ set -euo pipefail
 # Launches sandboxed AI coding agents in Docker containers
 #
 # Usage:
-#   ./harness.sh plan    --project <path> --repos <repo:mode> ... --agent <agent>
-#   ./harness.sh dev     --project <path> --repos <repo:mode> ... --agent <agent> --spec <path> [--parallel]
-#   ./harness.sh review  --project <path> --repos <repo:mode> ... --agent <agent> --branches <b1,b2,...>
+#   ./harness.sh plan    --project <path> --repos <repo:mode> ...
+#   ./harness.sh dev     --project <path> --repos <repo:mode> ... [--agent <agent>] [--spec <path>]
+#   ./harness.sh review  --project <path> --repos <repo:mode> ... --branches <b1,b2,...> [--agent <agent>] [--review-spec <stage|main>]
 #
 # Examples:
-#   ./harness.sh plan --project my-org/my-project --repos ~/git/my-app:ro --agent claude-code
-#   ./harness.sh dev --project my-org/my-project --repos ~/git/my-app:rw --agent claude-code --spec /context/my-org/my-project/PROJ-1-feature.md
-#   ./harness.sh review --project my-org/my-project --repos ~/git/my-app:ro --agent claude-code --branches feat/proj-1-feature
+#   ./harness.sh plan --project my-org/my-project --repos ~/git/my-app:ro
+#   ./harness.sh dev --project my-org/my-project --repos ~/git/my-app:rw --agent codex --spec Q-47-mcp-validation-handoff.md
+#   ./harness.sh review --project my-org/my-project --repos ~/git/my-app:ro --branches feat/proj-1-feature
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 IMAGE_NAME="agent-harness:latest"
@@ -25,12 +25,12 @@ COOKBOOKS_PATH="${COOKBOOKS_PATH:-}"
 # Defaults
 PHASE=""
 PROJECT=""
-AGENT="claude-code"
+AGENT=""
 NETWORK_PROFILE=""
 GITHUB_APP_PEM="${GITHUB_APP_PEM:-}"
 SPEC=""
 BRANCHES=""
-PARALLEL=false
+REVIEW_SPEC=""
 REPOS=()
 
 # Colors
@@ -54,12 +54,20 @@ PHASES:
 OPTIONS:
   --project <path>         Context repo project path (e.g., my-org/my-project)
   --repos <path:mode>      Repository to mount. Mode is rw or ro. Repeatable.
-  --agent <name>           Agent to use: claude-code (default) or codex
+  --agent <name>           Agent: claude-code (or claude), codex. See defaults below.
   --network-profile <name> Network profile: default, plan, python-dev, node-dev, review-only
-  --spec <path>            Spec file path (dev phase)
-  --branches <b1,b2,...>   Branches to review (review phase)
-  --parallel               Enable parallel worktree execution (dev phase)
+  --spec <path|filename>   Dev: spec file (path, relative path, or filename). Optional.
+  --branches <b1,b2,...>   Branches to review (review phase, required)
+  --base <stage|main>      Review comparison base (default: stage)
   --name <name>            Container name (default: harness-<phase>-<timestamp>)
+  --dry-run                Print resolved config and exit (no Docker)
+
+AGENT DEFAULTS:
+  plan    → claude-code (auto-launches with repo context prompt)
+  dev     → claude-code if --spec given, otherwise shell (both agents available)
+  review  → codex (auto-launches with review coordinator prompt)
+
+  Both agents are always authenticated. Override with --agent.
 
 ENVIRONMENT:
   COOKBOOKS_PATH                 Path to your context/notes repo (required)
@@ -74,6 +82,10 @@ die() { echo -e "${RED}ERROR:${NC} $*" >&2; exit 1; }
 info() { echo -e "${GREEN}[harness]${NC} $*"; }
 warn() { echo -e "${YELLOW}[harness]${NC} $*"; }
 
+# Expand repo spec to absolute path (strips :mode, expands ~)
+repo_path_from_spec() { local p="${1%%:*}"; echo "${p/#\~/$HOME}"; }
+repo_mode_from_spec() { echo "${1##*:}"; }
+
 # Parse arguments
 [[ $# -eq 0 ]] && usage
 PHASE="$1"; shift
@@ -85,6 +97,7 @@ case "$PHASE" in
 esac
 
 CONTAINER_NAME=""
+DRY_RUN=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -92,9 +105,10 @@ while [[ $# -gt 0 ]]; do
     --repos)      REPOS+=("$2"); shift 2 ;;
     --agent)      AGENT="$2"; shift 2 ;;
     --network-profile) NETWORK_PROFILE="$2"; shift 2 ;;
+    --dry-run)    DRY_RUN=true; shift ;;
     --spec)       SPEC="$2"; shift 2 ;;
     --branches)   BRANCHES="$2"; shift 2 ;;
-    --parallel)   PARALLEL=true; shift ;;
+    --base)       REVIEW_SPEC="$2"; shift 2 ;;
     --name)       CONTAINER_NAME="$2"; shift 2 ;;
     -h|--help)    usage ;;
     *)            die "Unknown option: $1" ;;
@@ -106,8 +120,45 @@ done
 [[ ! -d "$COOKBOOKS_PATH" ]] && die "COOKBOOKS_PATH directory not found: $COOKBOOKS_PATH"
 [[ -z "$PROJECT" ]] && die "--project is required"
 [[ ${#REPOS[@]} -eq 0 ]] && die "At least one --repos is required"
-[[ "$PHASE" == "dev" && -z "$SPEC" ]] && die "--spec is required for dev phase"
 [[ "$PHASE" == "review" && -z "$BRANCHES" ]] && die "--branches is required for review phase"
+
+# Normalize agent name (accept shorthand)
+case "$AGENT" in
+  claude) AGENT="claude-code" ;;
+  "") ;;  # empty is OK, defaults applied below
+  claude-code|codex) ;;  # valid
+  *) die "Unknown agent: $AGENT. Use claude-code (or claude) or codex." ;;
+esac
+
+# Default agent per phase
+if [[ -z "$AGENT" ]]; then
+  case "$PHASE" in
+    plan)   AGENT="claude-code" ;;  # Plan always launches with context prompt
+    dev)    [[ -n "$SPEC" ]] && AGENT="claude-code" ;;  # Dev+spec defaults to claude
+    review) AGENT="codex" ;;  # Review defaults to codex
+  esac
+fi
+
+# Resolve dev spec to full container path
+if [[ "$PHASE" == "dev" && -n "$SPEC" ]]; then
+  if [[ "$SPEC" != /* ]]; then
+    # Relative path or filename — resolve from cookbooks
+    RESOLVED=$(find "$COOKBOOKS_PATH" -path "*/$SPEC" -type f 2>/dev/null | head -1)
+    [[ -z "$RESOLVED" ]] && RESOLVED=$(find "$COOKBOOKS_PATH" -name "$(basename "$SPEC")" -type f 2>/dev/null | head -1)
+    [[ -z "$RESOLVED" ]] && die "Spec file not found in cookbooks: $SPEC"
+    SPEC="/cookbooks/${RESOLVED#$COOKBOOKS_PATH/}"
+    info "Resolved spec: $SPEC"
+  fi
+fi
+
+# Default and validate review base
+if [[ "$PHASE" == "review" ]]; then
+  REVIEW_SPEC="${REVIEW_SPEC:-stage}"
+  case "$REVIEW_SPEC" in
+    stage|main) ;;
+    *) die "Unknown review base: $REVIEW_SPEC. Use stage or main." ;;
+  esac
+fi
 
 # Default network profile per phase
 if [[ -z "$NETWORK_PROFILE" ]]; then
@@ -131,8 +182,7 @@ fi
 # --- Validate repo name uniqueness ---
 SEEN_REPO_NAMES=""
 for repo_spec in "${REPOS[@]}"; do
-  repo_path="${repo_spec%%:*}"
-  repo_path="${repo_path/#\~/$HOME}"
+  repo_path="$(repo_path_from_spec "$repo_spec")"
   rname=$(basename "$repo_path")
   if echo "$SEEN_REPO_NAMES" | grep -qx "$rname"; then
     die "Repo name collision: '$rname' would be mounted twice (/repos/$rname). Use repos with distinct directory names."
@@ -146,29 +196,37 @@ AGENT_TMPDIR=$(mktemp -d "${TMPDIR:-/tmp}/harness-agent-XXXXXX")
 trap 'rm -rf "$AGENT_TMPDIR" 2>/dev/null' EXIT
 info "Agent config dir: $AGENT_TMPDIR"
 
-# Seed credentials based on agent type
-if [[ "$AGENT" == "claude-code" ]]; then
-  mkdir -p "$AGENT_TMPDIR/.claude"
-  # Copy config files (not sessions/memory)
-  [[ -f "$HOME/.claude/credentials.json" ]] && cp "$HOME/.claude/credentials.json" "$AGENT_TMPDIR/.claude/credentials.json"
-  [[ -f "$HOME/.claude/settings.json" ]] && cp "$HOME/.claude/settings.json" "$AGENT_TMPDIR/.claude/settings.json"
-  # Sanitize .claude.json for container use:
-  # - Rewrite localhost URLs to host.docker.internal (for host-side services like Plane)
-  # - Remove MCP servers that require host hardware (trnscrb)
-  # Build path mapping JSON: host paths → container paths
-  # Cookbooks path → /cookbooks, each repo → /repos/<basename>
-  PATH_MAP="{\"$(cd "$COOKBOOKS_PATH" && pwd -P)\": \"/cookbooks\""
-  for repo_spec in "${REPOS[@]}"; do
-    repo_path="${repo_spec%%:*}"
-    repo_path="${repo_path/#\~/$HOME}"
-    repo_real="$(cd "$repo_path" && pwd -P)"
-    repo_name=$(basename "$repo_path")
-    PATH_MAP="$PATH_MAP, \"$repo_real\": \"/repos/$repo_name\""
-  done
-  PATH_MAP="$PATH_MAP}"
+# --- Dry-run: print resolved config and exit ---
+if [[ "$DRY_RUN" == "true" ]]; then
+  echo "PHASE=$PHASE"
+  echo "AGENT=${AGENT:-}"
+  echo "SPEC=$SPEC"
+  echo "REVIEW_SPEC=${REVIEW_SPEC:-}"
+  echo "NETWORK=$NETWORK_PROFILE"
+  echo "PROJECT=$PROJECT"
+  echo "REPOS=${REPOS[*]}"
+  exit 0
+fi
 
-  if [[ -f "$HOME/.claude.json" ]]; then
-    python3 -c "
+# --- Seed credentials for BOTH agents (both always available in container) ---
+
+# Claude Code credentials
+mkdir -p "$AGENT_TMPDIR/.claude"
+[[ -f "$HOME/.claude/credentials.json" ]] && cp "$HOME/.claude/credentials.json" "$AGENT_TMPDIR/.claude/credentials.json"
+[[ -f "$HOME/.claude/settings.json" ]] && cp "$HOME/.claude/settings.json" "$AGENT_TMPDIR/.claude/settings.json"
+
+# Build path mapping JSON for .claude.json sanitizer
+PATH_MAP="{\"$(cd "$COOKBOOKS_PATH" && pwd -P)\": \"/cookbooks\""
+for repo_spec in "${REPOS[@]}"; do
+  repo_path="$(repo_path_from_spec "$repo_spec")"
+  repo_real="$(cd "$repo_path" && pwd -P)"
+  repo_name=$(basename "$repo_path")
+  PATH_MAP="$PATH_MAP, \"$repo_real\": \"/repos/$repo_name\""
+done
+PATH_MAP="$PATH_MAP}"
+
+if [[ -f "$HOME/.claude.json" ]]; then
+  python3 -c "
 import json, sys, re
 
 try:
@@ -186,15 +244,12 @@ except json.JSONDecodeError as e:
 def sanitize_mcp(servers):
     to_remove = []
     for name, cfg in servers.items():
-        # Rewrite STDIO servers that need host hardware to HTTP/SSE transport
-        # (they must be running on the host with network transport enabled)
         if name == 'trnscrb' and cfg.get('type', 'stdio') == 'stdio':
             servers[name] = {
                 'type': 'sse',
                 'url': 'http://host.docker.internal:8001/sse'
             }
             continue
-        # Rewrite localhost to host.docker.internal in env vars and URLs
         if 'env' in cfg:
             for k, v in cfg['env'].items():
                 if isinstance(v, str):
@@ -204,15 +259,12 @@ def sanitize_mcp(servers):
     for name in to_remove:
         del servers[name]
 
-# Global mcpServers
 if 'mcpServers' in d:
     sanitize_mcp(d['mcpServers'])
 
-# Per-project mcpServers — remap project paths to container paths
 if 'projects' in d:
     remapped = {}
     for proj, pcfg in d['projects'].items():
-        # Find the container path for this project
         container_path = None
         for host_path, cont_path in path_map.items():
             if proj == host_path or proj.rstrip('/') == host_path.rstrip('/'):
@@ -220,7 +272,6 @@ if 'projects' in d:
                 break
         new_key = container_path if container_path else proj
         if new_key in remapped:
-            # Merge MCP servers if same container path
             existing = remapped[new_key].get('mcpServers', {})
             existing.update(pcfg.get('mcpServers', {}))
             remapped[new_key]['mcpServers'] = existing
@@ -237,41 +288,30 @@ except IOError as e:
     print(f'[sanitize] ERROR: Failed to write {sys.argv[2]}: {e}', file=sys.stderr)
     sys.exit(1)
 " "$HOME/.claude.json" "$AGENT_TMPDIR/.claude.json" "$PATH_MAP" || die "Failed to sanitize .claude.json"
-    info "Sanitized .claude.json (remapped paths, rewrote localhost, removed hardware-dependent MCP servers)"
-  fi
-elif [[ "$AGENT" == "codex" ]]; then
-  mkdir -p "$AGENT_TMPDIR/.codex"
-  # Copy auth tokens (read-write — Codex refreshes tokens in place)
-  [[ -f "$HOME/.codex/auth.json" ]] && cp "$HOME/.codex/auth.json" "$AGENT_TMPDIR/.codex/auth.json"
-  # Copy and sanitize config (rewrite localhost → host.docker.internal for MCP servers)
-  if [[ -f "$HOME/.codex/config.toml" ]]; then
-    # Sanitize: rewrite localhost, strip host-specific [projects.*] sections
-    python3 -c "
-import re, sys
-with open(sys.argv[1]) as f:
-    content = f.read()
-# Rewrite localhost
-content = re.sub(r'localhost|127\.0\.0\.1', 'host.docker.internal', content)
-# Remove [projects.*] sections (host paths that don't exist in container)
-content = re.sub(r'\[projects\.[^\]]*\]\n(?:[^\[]*\n)*', '', content)
-with open(sys.argv[2], 'w') as f:
-    f.write(content)
-" "$HOME/.codex/config.toml" "$AGENT_TMPDIR/.codex/config.toml"
-    info "Sanitized .codex/config.toml (rewrote localhost, stripped host project paths)"
-  fi
-  # Copy project-level codex configs from mounted repos
-  for repo_spec in "${REPOS[@]}"; do
-    repo_path="${repo_spec%%:*}"
-    repo_path="${repo_path/#\~/$HOME}"
-    repo_name=$(basename "$repo_path")
-    if [[ -f "$repo_path/.codex/auth.json" ]]; then
-      mkdir -p "$AGENT_TMPDIR/.codex/projects/$repo_name"
-      cp "$repo_path/.codex/auth.json" "$AGENT_TMPDIR/.codex/projects/$repo_name/auth.json"
-    fi
-  done
-else
-  die "Unknown agent: $AGENT. Use claude-code or codex."
+  info "Sanitized .claude.json"
 fi
+
+# Codex credentials
+mkdir -p "$AGENT_TMPDIR/.codex"
+[[ -f "$HOME/.codex/auth.json" ]] && cp "$HOME/.codex/auth.json" "$AGENT_TMPDIR/.codex/auth.json"
+[[ -f "$HOME/.codex/cloud-requirements-cache.json" ]] && cp "$HOME/.codex/cloud-requirements-cache.json" "$AGENT_TMPDIR/.codex/cloud-requirements-cache.json"
+
+if [[ -f "$HOME/.codex/config.toml" ]]; then
+  python3 "$SCRIPT_DIR/scripts/sanitize-codex-config.py" "$HOME/.codex/config.toml" "$AGENT_TMPDIR/.codex/config.toml"
+  info "Sanitized .codex/config.toml"
+fi
+
+# Add trust entries for container repo paths + copy project auth
+for repo_spec in "${REPOS[@]}"; do
+  repo_path="$(repo_path_from_spec "$repo_spec")"
+  repo_name=$(basename "$repo_path")
+  printf '\n[projects."/repos/%s"]\ntrust_level = "trusted"\n' "$repo_name" \
+    >> "$AGENT_TMPDIR/.codex/config.toml"
+  if [[ -f "$repo_path/.codex/auth.json" ]]; then
+    mkdir -p "$AGENT_TMPDIR/.codex/projects/$repo_name"
+    cp "$repo_path/.codex/auth.json" "$AGENT_TMPDIR/.codex/projects/$repo_name/auth.json"
+  fi
+done
 
 # --- Build docker run arguments ---
 DOCKER_ARGS=(
@@ -289,13 +329,10 @@ DOCKER_ARGS=(
   ${OPENAI_API_KEY:+"-e" "OPENAI_API_KEY=$OPENAI_API_KEY"}
 )
 
-# Agent config mounts
-if [[ "$AGENT" == "claude-code" ]]; then
-  DOCKER_ARGS+=("-v" "$AGENT_TMPDIR/.claude:/home/agent/.claude:rw")
-  [[ -f "$AGENT_TMPDIR/.claude.json" ]] && DOCKER_ARGS+=("-v" "$AGENT_TMPDIR/.claude.json:/home/agent/.claude.json:rw")
-elif [[ "$AGENT" == "codex" ]]; then
-  DOCKER_ARGS+=("-v" "$AGENT_TMPDIR/.codex:/home/agent/.codex:rw")
-fi
+# Agent config mounts (both agents always available)
+DOCKER_ARGS+=("-v" "$AGENT_TMPDIR/.claude:/home/agent/.claude:rw")
+[[ -f "$AGENT_TMPDIR/.claude.json" ]] && DOCKER_ARGS+=("-v" "$AGENT_TMPDIR/.claude.json:/home/agent/.claude.json:rw")
+DOCKER_ARGS+=("-v" "$AGENT_TMPDIR/.codex:/home/agent/.codex:rw")
 
 # GitHub App credentials (for git HTTPS push/pull and gh CLI)
 if [[ -n "${GITHUB_APP_ID:-}" && -n "${GITHUB_APP_INSTALLATION_ID:-}" && -n "$GITHUB_APP_PEM" ]]; then
@@ -312,11 +349,8 @@ DOCKER_ARGS+=("-v" "$COOKBOOKS_PATH:/cookbooks:rw")
 
 # Repo mounts
 for repo_spec in "${REPOS[@]}"; do
-  repo_path="${repo_spec%%:*}"
-  repo_mode="${repo_spec##*:}"
-
-  # Expand ~ if present
-  repo_path="${repo_path/#\~/$HOME}"
+  repo_path="$(repo_path_from_spec "$repo_spec")"
+  repo_mode="$(repo_mode_from_spec "$repo_spec")"
 
   [[ -d "$repo_path" ]] || die "Repository not found: $repo_path"
 
@@ -329,16 +363,25 @@ for repo_spec in "${REPOS[@]}"; do
 
   repo_name=$(basename "$repo_path")
   DOCKER_ARGS+=("-v" "$repo_path:/repos/$repo_name:$repo_mode")
+
+  # Overlay sanitized .codex/config.toml if present (strip host-path [projects.*] sections)
+  if [[ -f "$repo_path/.codex/config.toml" ]]; then
+    sanitized="$AGENT_TMPDIR/.codex/repo-configs/$repo_name-config.toml"
+    mkdir -p "$AGENT_TMPDIR/.codex/repo-configs"
+    python3 "$SCRIPT_DIR/scripts/sanitize-codex-config.py" "$repo_path/.codex/config.toml" "$sanitized"
+    DOCKER_ARGS+=("-v" "$sanitized:/repos/$repo_name/.codex/config.toml:ro")
+    info "Overlaid sanitized .codex/config.toml for $repo_name"
+  fi
 done
 
 # Phase-specific environment
-if [[ "$PHASE" == "dev" ]]; then
+if [[ "$PHASE" == "dev" && -n "$SPEC" ]]; then
   DOCKER_ARGS+=("-e" "HARNESS_SPEC=$SPEC")
-  [[ "$PARALLEL" == "true" ]] && DOCKER_ARGS+=("-e" "HARNESS_PARALLEL=true")
 fi
 
 if [[ "$PHASE" == "review" ]]; then
   DOCKER_ARGS+=("-e" "HARNESS_BRANCHES=$BRANCHES")
+  DOCKER_ARGS+=("-e" "HARNESS_REVIEW_SPEC=${REVIEW_SPEC:-stage}")
 fi
 
 # Image and command — start detached first so we can init firewall as root
@@ -347,12 +390,12 @@ DOCKER_ARGS+=("$IMAGE_NAME")
 # --- Launch ---
 info "Phase:    $PHASE"
 info "Project:  $PROJECT"
-info "Agent:    $AGENT"
+info "Agent:    ${AGENT:-shell (both agents available)}"
 info "Network:  $NETWORK_PROFILE"
 info "Repos:    ${REPOS[*]}"
 [[ -n "$SPEC" ]] && info "Spec:     $SPEC"
 [[ -n "$BRANCHES" ]] && info "Branches: $BRANCHES"
-[[ "$PARALLEL" == "true" ]] && info "Parallel: enabled"
+[[ -n "$REVIEW_SPEC" ]] && info "Base:     $REVIEW_SPEC"
 info "Container: $CONTAINER_NAME"
 echo ""
 
