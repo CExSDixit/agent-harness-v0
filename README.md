@@ -103,6 +103,7 @@ my-context-repo/
 | **Python 3** | Config sanitization (JSON/TOML rewriting) | Pre-installed on macOS. `brew install python3` or `apt install python3` |
 | **jq** | GitHub meta API parsing in firewall init | `brew install jq` or `apt install jq` |
 | **Bash 3.2+** | harness.sh shell | Pre-installed on macOS and Linux |
+| **pngpaste** | Clipboard image paste workflow (macOS only, optional) | `brew install pngpaste` |
 
 Standard utilities also used: `curl`, `sed`, `cp`, `mkdir`, `mktemp`, `basename`, `dirname` (all pre-installed on macOS and Linux).
 
@@ -644,6 +645,44 @@ With Docker layer caching, incremental rebuilds (e.g., adding a profile) take se
 | Modify `init-firewall.sh` or helper scripts | Yes |
 | Change `harness.sh` | No (runs on host) |
 | Add domains at runtime via `allow-domain` | No |
+
+## Known Limitations
+
+### Clipboard image paste doesn't work in containers
+
+Claude Code's image paste (Ctrl+V with a screenshot) reads from the macOS clipboard API, which is not available inside Docker containers — even through VS Code Remote Containers. The clipboard is an OS-level resource that doesn't cross the container boundary.
+
+**Workaround: `harness-paste.sh`**
+
+A helper script bridges the gap by saving the clipboard image to a shared mount point and copying the container-relative path to your clipboard:
+
+1. Take a screenshot: **Cmd+Shift+4** (select region → copies to clipboard)
+2. Run the paste script (via keyboard shortcut or manually):
+   ```bash
+   ~/git/agent-harness-v0/scripts/harness-paste.sh
+   ```
+3. A macOS notification shows the container path
+4. The container path is now in your clipboard: `/cookbooks/.harness-images/paste-<timestamp>.png`
+5. In the container terminal: type `@` then **Cmd+V** to paste the path
+
+The image is saved to `$COOKBOOKS_PATH/.harness-images/` which is bind-mounted at `/cookbooks/.harness-images/` in every container. The path is identical across all three modes.
+
+**Setting up a keyboard shortcut (macOS Automator):**
+
+1. Open **Automator** → New → **Quick Action**
+2. Set "Workflow receives" to **no input** in **any application**
+3. Add action: **Run Shell Script**
+4. Shell: `/bin/bash`
+5. Script: full path to `harness-paste.sh` (e.g., `/Users/you/git/agent-harness-v0/scripts/harness-paste.sh`)
+6. Save as "Harness Paste"
+7. **System Settings → Keyboard → Keyboard Shortcuts → Services** → find "Harness Paste" → assign a shortcut (e.g., **Ctrl+Shift+V**)
+
+**Cleanup:** `.harness-images/` accumulates files over time. Periodically run:
+```bash
+rm ~/git/<your-context-repo>/.harness-images/*
+```
+
+The directory is gitignored — screenshots are never committed.
 
 ## Security
 
