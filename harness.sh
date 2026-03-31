@@ -448,10 +448,19 @@ DOCKER_DETACH_ARGS+=("$IMAGE_NAME" "sleep" "infinity")
 
 docker "${DOCKER_DETACH_ARGS[@]}" >/dev/null
 
+# Wait for container to be ready for exec
+for _wait in 1 2 3 4 5; do
+  docker exec "$CONTAINER_NAME" true 2>/dev/null && break
+  sleep 1
+done
+
 # Step 2: Initialize firewall as root (agent user cannot do this)
 info "Initializing firewall as root (profile: $NETWORK_PROFILE)..."
-if ! docker exec -u root "$CONTAINER_NAME" /usr/local/bin/init-firewall.sh "$NETWORK_PROFILE"; then
-  warn "FATAL: Firewall initialization failed. Stopping container."
+FW_OUTPUT=$(docker exec -u root "$CONTAINER_NAME" /usr/local/bin/init-firewall.sh "$NETWORK_PROFILE" 2>&1)
+FW_EXIT=$?
+echo "$FW_OUTPUT"
+if [[ $FW_EXIT -ne 0 ]]; then
+  warn "FATAL: Firewall initialization failed (exit $FW_EXIT). Stopping container."
   docker stop "$CONTAINER_NAME" >/dev/null 2>&1 || true
   rm -rf "$AGENT_TMPDIR"
   die "Cannot start without network isolation."
